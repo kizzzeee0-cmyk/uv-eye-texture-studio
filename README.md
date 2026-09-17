@@ -1,32 +1,67 @@
-# UV Eye Texture Studio v0.2
+# UV Eye Texture Studio v0.3
 
-브라우저에서 동작하는 UV 기반 눈동자 텍스처 편집기입니다.
+UV / VRM / VRC / VTuber용 눈동자 텍스처를 브라우저 안에서 비파괴 방식으로 디자인하는 실험적 웹 에디터입니다.
 
-## v0.2 주요 기능
+## v0.3 핵심 기능
 
 - PNG UV 텍스처 업로드
 - Zoom / Pan / Fit / 100%
-- Left / Right Iris Mask 이동 및 수치 조절
-- Top / Mid / Bottom 컬러 그라데이션
-- Outer Ring / Pupil
-- Radial Pattern 강도 조절
-- Reflection 색상 / 강도 조절
-- Highlight 강도 / 크기 / 위치 조절
-- 6개 기본 색상 프리셋
-- Seed 기반 Randomize
-- Link Eyes
-- L → R / R → L 스타일 복사
-- 브라우저 로컬 설정 저장/불러오기
-- Project Settings JSON Export / Import
+- Left / Right Eye 독립 Mask
+- Ellipse Mask 새로 그리기
+- **Polygon Free-form Mask**
+  - 캔버스를 자유롭게 클릭해서 점 생성
+  - 첫 점 클릭 또는 Complete로 닫기
+  - 점 Drag 수정
+  - Shift + Click edge = 점 추가
+  - Alt + Click point = 점 삭제
+  - 전체 Mask 이동
+  - Inward Feather
+- 5-stop Iris Gradient
+- Upper Shadow / Lower Glow
+- Outer Ring / Inner Ring / Extra Inner Ring
+- Circle / Oval Pupil
+- Seed 기반 Radial Texture
+- Soft Texture
+- Lower Motif 6종
+  - Petal
+  - Dash
+  - Droplet
+  - Glass
+  - Wave
+  - Oval Cluster
+- Reflection 4종
+- Highlight Group 6종
+- Particle 4종
+- 10개 Starter Preset
+- Seed Randomizer + 카테고리별 Random 잠금
+- Left ↔ Right 디자인 복사
+- Design Link
+- Browser Local Save
+- Project JSON Save / Load
 - Full UV PNG Export
-- Selected Iris PNG Export
+- Transparent Single Iris Export
+
+## UV 보호 원칙
+
+Full PNG Export는 원본 PNG를 먼저 그린 뒤, Eye Design을 Mask 내부에만 합성합니다.
+
+- Canvas 크기 변경 없음
+- 원본 UV 좌표 이동 없음
+- Hard Mask 외부에는 디자인을 그리지 않음
+- Feather는 hard mask 밖으로 번지지 않도록 inward 방식으로 처리
+
+PNG 인코딩 자체의 메타데이터/압축 바이트까지 원본과 동일하게 유지하는 도구는 아니지만, 편집 렌더링은 지정된 mask 내부로 제한됩니다.
 
 ## 실행
+
+Node.js 18+ 권장.
 
 ```bash
 npm install
 npm run dev
 ```
+
+터미널에 표시되는 localhost 주소를 Chrome에서 엽니다.
 
 ## 빌드
 
@@ -34,21 +69,34 @@ npm run dev
 npm run build
 ```
 
+결과 폴더: `dist`
+
 ## Cloudflare Pages
 
-```text
-Build command: npm run build
-Build output directory: dist
-```
+- Framework: Vite
+- Build command: `npm run build`
+- Build output directory: `dist`
 
-자세한 초보자용 절차는 `DEPLOY-GUIDE-KO.md`를 확인하세요.
+## 주요 파일
 
-## 아직 추가 예정인 기능
+- `src/App.tsx` — 전체 UI / Mask 조작 / 저장
+- `src/lib/types.ts` — 프로젝트 데이터 구조
+- `src/lib/presets.ts` — 기본 디자인과 10개 프리셋
+- `src/lib/irisRenderer.ts` — 실제 눈동자 procedural renderer
+- `src/lib/mask.ts` — Ellipse/Polygon mask 계산
+- `src/lib/random.ts` — Seed randomizer
+- `src/styles.css` — UI 디자인
 
-- 직접 드래그하는 Mask 크기 조절 핸들
-- Undo / Redo
-- 완전한 IndexedDB 프로젝트 저장
-- Layer reorder 시스템
-- Crystal / Wave / Ice 패턴 라이브러리
-- 4/8/12 Variation 비교 화면
-- Pixel Preservation 자동 검증
+자세한 수정법은 `MODIFY-GUIDE-KO.md`를 확인하세요.
+
+## v0.3에서 아직 없는 기능
+
+- Brush/Lasso Mask
+- 자동 홍채 영역 탐지
+- Undo / Redo History
+- Photoshop식 자유 Layer 순서 변경
+- 4/8/12 Variation 비교창
+- 원본 PNG Blob을 포함한 완전한 IndexedDB 프로젝트 복원
+- VRM/GLB 3D 실시간 Preview
+
+이 기능들은 v0.4 이후 확장하기 좋은 구조로 분리되어 있습니다.

@@ -24,138 +24,181 @@ export interface PolygonMask {
 
 export type EyeMask = EllipseMask | PolygonMask
 
-export type PupilShape = 'circle' | 'oval' | 'heart' | 'petal' | 'slit'
-export type MotifType = 'petal' | 'dash' | 'droplet' | 'glass' | 'wave' | 'ovalCluster' | 'lightShards' | 'mixedPoints'
-export type ReflectionType = 'softPatch' | 'curved' | 'side' | 'haze' | 'topBand'
-export type HighlightPreset = 'singleLarge' | 'animeStandard' | 'glassyDouble' | 'cluster' | 'sideHighlight' | 'topDome' | 'sparkleArc'
-export type ParticleType = 'dot' | 'star' | 'diamond' | 'tinyCircle'
+export type PupilShape = 'circle' | 'ovalVertical' | 'ovalHorizontal' | 'softOval' | 'heart' | 'petal' | 'droplet' | 'lens' | 'slit' | 'core'
+export type LowerPointType = 'wave' | 'petal' | 'droplet' | 'glass' | 'reflection' | 'ovalCluster' | 'stippling' | 'curve' | 'mixed' | 'handdrawn'
+export type UpperShadowType = 'softShadow' | 'deepShadow' | 'lashShadow' | 'splitLash' | 'animeTop' | 'jellyDark' | 'handdrawnShadow'
+export type ReflectionType = 'purpleGlow' | 'blueGlass' | 'topLens' | 'sideThin' | 'curvedBand' | 'complex' | 'mist' | 'handdrawn'
+export type OverlayPresetType = 'cloud' | 'fog' | 'glassVein' | 'flower' | 'starMist' | 'fragments' | 'ripple' | 'brushStroke' | 'handBrush'
+export type IrisTextureType = 'softRadial' | 'handRadial' | 'fibers' | 'ripple' | 'speckle'
+export type BlendMode = 'source-over' | 'screen' | 'overlay' | 'multiply' | 'soft-light'
 
-export interface EyeStyle {
+export interface BackgroundState {
+  enabled: boolean
+  presetId: string | null
+  topColor: string
+  upperMidColor: string
+  midColor: string
+  lowerMidColor: string
+  bottomColor: string
   opacity: number
-  gradient: {
-    enabled: boolean
-    top: string
-    upperMid: string
-    mid: string
-    lowerMid: string
-    bottom: string
-  }
-  upperShadow: {
-    enabled: boolean
-    color: string
-    intensity: number
-    height: number
-    softness: number
-  }
-  lowerGlow: {
-    enabled: boolean
-    color: string
-    intensity: number
-    height: number
-    spread: number
-  }
-  outerRing: {
-    enabled: boolean
-    color: string
-    thickness: number
-    opacity: number
-    blur: number
-  }
-  innerRing: {
-    enabled: boolean
-    color: string
-    radius: number
-    thickness: number
-    opacity: number
-    blur: number
-  }
-  extraInnerRing: {
-    enabled: boolean
-    color: string
-    radius: number
-    thickness: number
-    opacity: number
-    blur: number
-  }
-  pupil: {
-    enabled: boolean
-    shape: PupilShape
-    x: number
-    y: number
-    scaleX: number
-    scaleY: number
-    color: string
-    opacity: number
-    softness: number
-  }
-  radial: {
-    enabled: boolean
-    color: string
-    strength: number
-    density: number
-    length: number
-    width: number
-    randomness: number
-    rotation: number
-    seed: number
-  }
-  softTexture: {
-    enabled: boolean
-    color: string
-    strength: number
-    amount: number
-    seed: number
-  }
-  lowerMotif: {
-    enabled: boolean
-    type: MotifType
-    color: string
-    count: number
-    size: number
-    spread: number
-    y: number
-    opacity: number
-    glow: number
-  }
-  reflection: {
-    enabled: boolean
-    type: ReflectionType
-    color: string
-    opacity: number
-    blur: number
-    x: number
-    y: number
-    scaleX: number
-    scaleY: number
-    rotation: number
-  }
-  highlight: {
-    enabled: boolean
-    preset: HighlightPreset
-    color: string
-    opacity: number
-    size: number
-    x: number
-    y: number
-    glow: number
-  }
-  particles: {
-    enabled: boolean
-    type: ParticleType
-    color: string
-    count: number
-    sizeMin: number
-    sizeMax: number
-    opacity: number
-    glow: number
-    seed: number
-  }
-  effects: {
-    brightness: number
-    contrast: number
-    saturation: number
-    bloom: number
-  }
+  contrast: number
+  softness: number
+}
+
+export interface RingState {
+  enabled: boolean
+  presetId: string | null
+  color: string
+  thickness: number
+  opacity: number
+  softness: number
+}
+
+export interface PupilState {
+  enabled: boolean
+  presetId: string | null
+  shape: PupilShape
+  x: number
+  y: number
+  scaleX: number
+  scaleY: number
+  rotation: number
+  topColor: string
+  midColor: string
+  bottomColor: string
+  edgeColor: string
+  gradientStrength: number
+  edgeOpacity: number
+  opacity: number
+  blur: number
+  softness: number
+}
+
+export interface LowerPointState {
+  enabled: boolean
+  presetId: string | null
+  type: LowerPointType
+  x: number
+  y: number
+  scale: number
+  spread: number
+  count: number
+  size: number
+  sizeJitter: number
+  rotation: number
+  color: string
+  secondaryColor: string
+  opacity: number
+  blur: number
+  glow: number
+  handDrawnAmount: number
+  seed: number
+}
+
+export interface UpperShadowState {
+  enabled: boolean
+  presetId: string | null
+  type: UpperShadowType
+  x: number
+  y: number
+  scaleX: number
+  scaleY: number
+  rotation: number
+  intensity: number
+  opacity: number
+  blur: number
+  color: string
+  lashCount: number
+  lashLength: number
+  lashSpread: number
+  handDrawnAmount: number
+}
+
+export interface ReflectionState {
+  enabled: boolean
+  presetId: string | null
+  type: ReflectionType
+  x: number
+  y: number
+  scaleX: number
+  scaleY: number
+  rotation: number
+  color: string
+  secondaryColor: string
+  opacity: number
+  blur: number
+  bloom: number
+  handDrawnAmount: number
+}
+
+export interface IrisTextureState {
+  enabled: boolean
+  presetId: string | null
+  type: IrisTextureType
+  color: string
+  secondaryColor: string
+  opacity: number
+  density: number
+  length: number
+  width: number
+  rotation: number
+  randomness: number
+  handDrawnAmount: number
+  seed: number
+}
+
+export interface OverlayPresetState {
+  enabled: boolean
+  presetId: string | null
+  type: OverlayPresetType
+  x: number
+  y: number
+  scaleX: number
+  scaleY: number
+  rotation: number
+  color: string
+  secondaryColor: string
+  opacity: number
+  blur: number
+  handDrawnAmount: number
+  seed: number
+}
+
+export interface HandDrawnTextureState {
+  enabled: boolean
+  presetId: string | null
+  amount: number
+  opacity: number
+  color: string
+  grainSize: number
+  seed: number
+}
+
+export interface OverlayImageState {
+  enabled: boolean
+  src: string | null
+  name: string | null
+  x: number
+  y: number
+  scale: number
+  rotation: number
+  opacity: number
+  flipX: boolean
+  tintColor: string | null
+  blendMode: BlendMode
+}
+
+export interface EyeDesignV5 {
+  background: BackgroundState
+  ring: RingState
+  pupil: PupilState
+  lowerPoint: LowerPointState
+  upperShadow: UpperShadowState
+  reflection: ReflectionState
+  irisTexture: IrisTextureState
+  overlayPreset: OverlayPresetState
+  handDrawnTexture: HandDrawnTextureState
+  overlayImage: OverlayImageState
 }
 
 export interface UVFileInfo {
@@ -171,21 +214,13 @@ export interface ViewState {
   offsetY: number
 }
 
-export interface RandomOptions {
-  colors: boolean
-  structure: boolean
-  texture: boolean
-  motif: boolean
-  highlights: boolean
-}
-
-export interface SavedProjectSettings {
-  version: 4
-  seed: number
-  linkEyes: boolean
-  selectedEye: EyeSide
-  masks: Record<EyeSide, EyeMask>
-  styles: Record<EyeSide, EyeStyle>
+export interface EyeProjectV5 {
+  version: 5
+  masks: {
+    left: EyeMask
+    right: EyeMask
+  }
+  design: EyeDesignV5
   source?: {
     name: string
     width: number

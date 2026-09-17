@@ -1,60 +1,59 @@
-# UV Eye Texture Studio v0.4
+# UV Eye Texture Studio v0.5
 
-A small local browser tool for designing anime / VTuber style eye UV textures directly on top of a PNG UV sheet.
+VTuber / VRM / VRChat용 PNG UV 눈동자 텍스처를 브라우저에서 조합형으로 디자인하는 실험적 편집기입니다.
 
-## What changed in v0.4
+## v0.5 핵심 변화
 
-- **Alpha-based eye auto detection**
-  - Detects left/right eye UV areas from visible non-transparent islands in a PNG.
-  - Best for PNGs where only the eye UV islands are opaque and the surrounding area is transparent.
-- **Detailed element preset libraries** instead of relying only on full finished eye presets.
-  - Background / gradient presets
-  - Lower motif presets (wave, petals, droplet, light reflection, mixed points)
-  - Pupil presets (circle, oval, heart, petal, slit)
-  - Upper shadow / eyelash reflection presets
-  - Reflection presets
-  - Highlight presets
-  - Particle presets
-- **New rendering features**
-  - New pupil shapes: heart, petal, slit
-  - New lower motif types: lightShards, mixedPoints
-  - New reflection type: topBand
-  - New highlight preset: sparkleArc
-- **Project version updated to 4**
-  - Browser save key changed to `uv-eye-studio-v04-settings`
-  - JSON export format version changed to `4`
+- PNG를 열면 **투명도를 기준으로 눈 UV 위치를 자동 인식** 시도
+- 처음 시작할 때 추가 디자인이 전부 꺼진 **클리어 상태**
+- Left / Right 개별 디자인 편집을 제거하고 **양안 대칭 동시 적용**
+- 완성형 눈 프리셋 대신 **세부 요소 프리셋** 중심
+- 같은 프리셋을 다시 클릭하면 해제
+- 모든 프리셋 그룹에 `끄기` 버튼 제공
+- 기존 흰색 원형 하이라이트 기능 완전 제거
+- 동공 위치 / 가로·세로 크기 / 회전 / 내부 그라데이션 조절
+- 동공 모양: 원형, 세로/가로 타원, 소프트 타원, 하트, 꽃잎, 물방울, 렌즈, 슬릿, 코어
+- 하단 포인트 프리셋 강화
+- 상단 그림자 / 속눈썹 그림자 프리셋
+- 색이 있는 반사광 프리셋
+- 홍채 결 / 내장 문양 / 손그림 질감
+- 사용자 PNG / WEBP / JPG 문양 이미지 불러오기
+- 외부 문양 위치 / 크기 / 회전 / 불투명도 / 혼합 모드 조절
+- 프로젝트 JSON 저장 / 불러오기
+- 브라우저 설정 저장 / 불러오기
+- Undo / Redo 기본 지원
+- 한국어 UI
 
-## Run locally
+## 실행
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Build
+## 빌드
 
 ```bash
-npm install
 npm run build
 ```
 
-## Main workflow
+## Cloudflare Pages
 
-1. Open a PNG UV texture.
-2. Click **Auto Detect Eyes** if the eye UV islands are isolated by transparency.
-3. Refine the masks with:
-   - Draw Ellipse
-   - Polygon Click
-   - Edit Points
-   - Move Mask
-4. Build the iris using the **Detailed Element Presets**.
-5. Fine-tune every layer in the right panel.
-6. Export:
-   - **Export Eye** for the selected iris only
-   - **Export Full PNG** for the complete UV sheet
+- Framework preset: Vite
+- Build command: `npm run build`
+- Build output directory: `dist`
 
-## Notes
+## 권장 작업 순서
 
-- The tool is designed to work **fully in the browser**.
-- The source PNG is **not embedded** inside browser save / project JSON.
-- If you load a saved project, you may need to reopen the matching source PNG.
+1. `UV 텍스처 열기`
+2. 자동 인식된 양쪽 마스크 확인
+3. 필요하면 `다각형 마스크` 또는 `점 편집`으로 수정
+4. `배경` 프리셋 선택
+5. `동공` 선택 및 크기/위치 조절
+6. `홍채 결`, `상단 그림자`, `하단 포인트`, `반사광`, `문양`을 하나씩 추가
+7. 필요하면 `이미지 오버레이`로 직접 만든 문양 PNG 추가
+8. `전체 PNG 저장`
+
+## 중요
+
+이 도구의 세부 디자인은 Canvas 기반 Procedural Rendering입니다. 외부 AI 이미지 생성 API를 사용하지 않습니다.

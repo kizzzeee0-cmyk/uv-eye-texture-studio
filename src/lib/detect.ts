@@ -23,14 +23,14 @@ export function detectEyeMasksFromAlpha(image: HTMLImageElement): DetectResult {
   canvas.height = image.naturalHeight
   const ctx = canvas.getContext('2d')
   if (!ctx) {
-    throw new Error('Canvas context unavailable.')
+    throw new Error('이미지 분석용 Canvas를 만들 수 없습니다.')
   }
   ctx.drawImage(image, 0, 0)
   const data = ctx.getImageData(0, 0, canvas.width, canvas.height)
   const components = extractComponents(data.data, canvas.width, canvas.height)
 
   if (components.length === 0) {
-    throw new Error('No visible alpha islands were found. Auto detect expects transparent background around each eye UV.')
+    throw new Error('불투명한 UV 영역을 찾지 못했습니다. 자동 인식은 눈 UV 주변이 투명한 PNG에서 가장 잘 작동합니다.')
   }
 
   const leftCandidates = components.filter((component) => component.cx < canvas.width * 0.5)
@@ -52,18 +52,18 @@ export function detectEyeMasksFromAlpha(image: HTMLImageElement): DetectResult {
       const fallback = componentToMask(ordered[0] ?? components[0])
       return {
         masks: { left: fallback, right: fallback },
-        message: 'Only one visible alpha island was found, so the same mask was reused for both eyes.',
+        message: '불투명 영역을 하나만 찾아 동일한 마스크를 양쪽에 임시 적용했습니다.',
       }
     }
     return {
       masks: { left: componentToMask(ordered[0]), right: componentToMask(ordered[1]) },
-      message: 'Detected the two largest visible alpha islands. Review and refine the masks if needed.',
+      message: '가장 적합한 두 개의 불투명 영역을 양쪽 눈으로 인식했습니다. 필요하면 점 편집으로 보정해주세요.',
     }
   }
 
   return {
     masks: { left: componentToMask(left), right: componentToMask(right) },
-    message: 'Detected left/right eye masks from the non-transparent UV islands.',
+    message: '투명하지 않은 UV 영역에서 양쪽 눈 마스크를 자동 인식했습니다.',
   }
 }
 

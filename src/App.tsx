@@ -1,55 +1,69 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, ReactNode, WheelEvent } from 'react'
+import type { ChangeEvent, PointerEvent as ReactPointerEvent, ReactNode, WheelEvent } from 'react'
 import { clamp, imageToScreen, nearestPointIndex, nearestSegmentIndex, screenToImage } from './lib/math'
-import { cloneMask, makeEllipseMask, makePolygonMask, pointInMask, translateMask } from './lib/mask'
-import { compositeIrisDesign, exportFullUvPng, exportSingleIrisPng } from './lib/irisRenderer'
+import { cloneMask, makeEllipseMask, makePolygonMask, translateMask } from './lib/mask'
+import { compositeEyeDesign, exportEyePng, exportFullUvPng } from './lib/irisRenderer'
+import { detectEyeMasksFromAlpha } from './lib/detect'
 import {
-  applyStylePatch,
-  BASE_PRESETS,
-  cloneStyle,
-  DEFAULT_STYLE,
-  HIGHLIGHT_PRESET_PATCHES,
-  LOWER_MOTIF_PRESETS,
-  PARTICLE_PRESETS,
-  PRESETS,
+  applyDesignPatch,
+  BACKGROUND_PRESETS,
+  CLEAR_DESIGN,
+  cloneDesign,
+  HANDDRAWN_PRESETS,
+  IRIS_TEXTURE_PRESETS,
+  LOWER_POINT_PRESETS,
+  OVERLAY_PRESETS,
   PUPIL_PRESETS,
   REFLECTION_PRESETS,
-  UPPER_ACCENT_PRESETS,
+  RING_PRESETS,
+  UPPER_SHADOW_PRESETS,
 } from './lib/presets'
-import { randomizeStyle } from './lib/random'
-import { detectEyeMasksFromAlpha } from './lib/detect'
-import type {
-  EyeMask,
-  EyeSide,
-  EyeStyle,
-  Point,
-  RandomOptions,
-  SavedProjectSettings,
-  ToolMode,
-  UVFileInfo,
-  ViewState,
-} from './lib/types'
+import type { EyeDesignV5, EyeMask, EyeProjectV5, Point, ToolMode, UVFileInfo, ViewState } from './lib/types'
 
-const TOOL_LABELS: Record<ToolMode, string> = {
-  pan: 'Pan',
-  ellipse: 'Draw Ellipse',
-  polygon: 'Polygon Click',
-  editPoints: 'Edit Points',
-  moveMask: 'Move Mask',
+type Category = 'mask' | 'background' | 'ring' | 'pupil' | 'lowerPoint' | 'upperShadow' | 'reflection' | 'irisTexture' | 'overlayPreset' | 'handDrawnTexture' | 'overlayImage'
+
+const CATEGORY_LABELS: Record<Category, string> = {
+  mask: '마스크',
+  background: '배경',
+  ring: '윤곽 링',
+  pupil: '동공',
+  lowerPoint: '하단 포인트',
+  upperShadow: '상단 그림자',
+  reflection: '반사광',
+  irisTexture: '홍채 결',
+  overlayPreset: '문양',
+  handDrawnTexture: '손그림 질감',
+  overlayImage: '이미지 오버레이',
 }
 
-const PUPIL_SHAPES = ['circle', 'oval', 'heart', 'petal', 'slit']
-const MOTIF_TYPES = ['petal', 'dash', 'droplet', 'glass', 'wave', 'ovalCluster', 'lightShards', 'mixedPoints']
-const REFLECTION_TYPES = ['softPatch', 'curved', 'side', 'haze', 'topBand']
-const HIGHLIGHT_TYPES = ['singleLarge', 'animeStandard', 'glassyDouble', 'cluster', 'sideHighlight', 'topDome', 'sparkleArc']
-const PARTICLE_TYPES = ['dot', 'star', 'diamond', 'tinyCircle']
+const TOOL_LABELS: Record<ToolMode, string> = {
+  pan: '이동',
+  ellipse: '타원 마스크',
+  polygon: '다각형 마스크',
+  editPoints: '점 편집',
+  moveMask: '마스크 전체 이동',
+}
 
-function createDefaultMasks(width: number, height: number): Record<EyeSide, EyeMask> {
+function createDefaultMasks(width: number, height: number) {
   const radius = Math.max(28, Math.round(Math.min(width, height) * 0.055))
   return {
     left: makeEllipseMask(width * 0.16, height * 0.13, radius, radius),
     right: makeEllipseMask(width * 0.84, height * 0.13, radius, radius),
   }
+}
+
+function mirrorMask(mask: EyeMask, width: number): EyeMask {
+  if (mask.type === 'ellipse') {
+    return { ...mask, cx: width - mask.cx, rotation: -mask.rotation }
+  }
+  return {
+    ...mask,
+    points: mask.points.map((point) => ({ x: width - point.x, y: point.y })).reverse(),
+  }
+}
+
+function deepCloneProject(project: EyeProjectV5): EyeProjectV5 {
+  return JSON.parse(JSON.stringify(project)) as EyeProjectV5
 }
 
 function downloadDataUrl(dataUrl: string, fileName: string) {
@@ -69,47 +83,39 @@ function downloadText(text: string, fileName: string) {
   setTimeout(() => URL.revokeObjectURL(url), 500)
 }
 
-function deepProjectClone(project: SavedProjectSettings): SavedProjectSettings {
-  return JSON.parse(JSON.stringify(project)) as SavedProjectSettings
-}
-
 export default function App() {
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const uvInputRef = useRef<HTMLInputElement | null>(null)
   const projectInputRef = useRef<HTMLInputElement | null>(null)
+  const overlayInputRef = useRef<HTMLInputElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const canvasHostRef = useRef<HTMLDivElement | null>(null)
 
   const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null)
+  const [overlayElement, setOverlayElement] = useState<HTMLImageElement | null>(null)
   const [uvInfo, setUvInfo] = useState<UVFileInfo | null>(null)
+  const [project, setProject] = useState<EyeProjectV5>({
+    version: 5,
+    masks: { left: makeEllipseMask(200, 150, 65, 65), right: makeEllipseMask(700, 150, 65, 65) },
+    design: cloneDesign(CLEAR_DESIGN),
+  })
   const [toolMode, setToolMode] = useState<ToolMode>('pan')
-  const [selectedEye, setSelectedEye] = useState<EyeSide>('left')
-  const [linkEyes, setLinkEyes] = useState(true)
+  const [category, setCategory] = useState<Category>('background')
   const [view, setView] = useState<ViewState>({ zoom: 1, offsetX: 0, offsetY: 0 })
   const [canvasSize, setCanvasSize] = useState({ width: 900, height: 650 })
-  const [masks, setMasks] = useState<Record<EyeSide, EyeMask>>({
-    left: makeEllipseMask(200, 150, 65, 65),
-    right: makeEllipseMask(700, 150, 65, 65),
-  })
-  const [styles, setStyles] = useState<Record<EyeSide, EyeStyle>>({
-    left: cloneStyle(DEFAULT_STYLE),
-    right: cloneStyle(DEFAULT_STYLE),
-  })
   const [draftPoints, setDraftPoints] = useState<Point[]>([])
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null)
-  const [seed, setSeed] = useState(9389)
-  const [randomOptions, setRandomOptions] = useState<RandomOptions>({ colors: true, structure: true, texture: true, motif: true, highlights: true })
-  const [status, setStatus] = useState('Ready — open a PNG UV texture.')
+  const [status, setStatus] = useState('UV 텍스처를 열어주세요.')
+  const historyRef = useRef<EyeProjectV5[]>([])
+  const futureRef = useRef<EyeProjectV5[]>([])
 
   const dragRef = useRef<
     | { type: 'pan'; startX: number; startY: number; offsetX: number; offsetY: number }
-    | { type: 'ellipse'; start: Point }
-    | { type: 'moveMask'; start: Point; original: EyeMask }
-    | { type: 'point'; index: number }
+    | { type: 'ellipse'; start: Point; original: EyeProjectV5 }
+    | { type: 'moveMask'; start: Point; original: EyeMask; originalProject: EyeProjectV5 }
+    | { type: 'point'; index: number; originalProject: EyeProjectV5 }
     | null
   >(null)
 
-  const selectedMask = masks[selectedEye]
-  const selectedStyle = styles[selectedEye]
   const canEdit = Boolean(imageElement && uvInfo)
   const zoomLabel = useMemo(() => `${Math.round(view.zoom * 100)}%`, [view.zoom])
 
@@ -127,73 +133,157 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    setDraftPoints([])
-    setSelectedPointIndex(null)
-  }, [selectedEye])
+    const src = project.design.overlayImage.src
+    if (!src) {
+      setOverlayElement(null)
+      return
+    }
+    const image = new Image()
+    image.onload = () => setOverlayElement(image)
+    image.onerror = () => setOverlayElement(null)
+    image.src = src
+  }, [project.design.overlayImage.src])
+
+  function pushHistory(snapshot = project) {
+    historyRef.current.push(deepCloneProject(snapshot))
+    if (historyRef.current.length > 80) historyRef.current.shift()
+    futureRef.current = []
+  }
+
+  function commitProject(updater: (current: EyeProjectV5) => EyeProjectV5) {
+    setProject((current) => {
+      historyRef.current.push(deepCloneProject(current))
+      if (historyRef.current.length > 80) historyRef.current.shift()
+      futureRef.current = []
+      return updater(deepCloneProject(current))
+    })
+  }
+
+  function undo() {
+    const previous = historyRef.current.pop()
+    if (!previous) return
+    futureRef.current.push(deepCloneProject(project))
+    setProject(previous)
+    setStatus('실행 취소했습니다.')
+  }
+
+  function redo() {
+    const next = futureRef.current.pop()
+    if (!next) return
+    historyRef.current.push(deepCloneProject(project))
+    setProject(next)
+    setStatus('다시 실행했습니다.')
+  }
+
+  function updateDesign(section: keyof EyeDesignV5, patch: Record<string, unknown>, withHistory = false) {
+    const apply = (current: EyeProjectV5) => ({
+      ...current,
+      design: {
+        ...current.design,
+        [section]: { ...(current.design[section] as object), ...patch },
+      },
+    }) as EyeProjectV5
+    if (withHistory) commitProject(apply)
+    else setProject((current) => apply(current))
+  }
+
+  function clearSection(section: keyof EyeDesignV5) {
+    commitProject((current) => ({
+      ...current,
+      design: { ...current.design, [section]: JSON.parse(JSON.stringify(CLEAR_DESIGN[section])) },
+    }) as EyeProjectV5)
+  }
+
+  function togglePreset(section: keyof EyeDesignV5, name: string, patch: any) {
+    const currentSection = project.design[section] as any
+    if (currentSection.enabled && currentSection.presetId === name) {
+      clearSection(section)
+      setStatus(`${CATEGORY_LABELS[section as Category] ?? '프리셋'}: ${name} 해제`)
+      return
+    }
+    commitProject((current) => {
+      const nextDesign = applyDesignPatch(current.design, patch)
+      return { ...current, design: nextDesign }
+    })
+    setStatus(`${name} 프리셋을 적용했습니다. 같은 버튼을 다시 누르면 해제됩니다.`)
+  }
 
   const fitView = () => {
     setView({ zoom: 1, offsetX: 0, offsetY: 0 })
-    setStatus('Fit view applied.')
+    setStatus('화면에 맞췄습니다.')
   }
 
   const resetTo100 = () => {
     if (!uvInfo) return
     const scaleAt100 = 1 / Math.min(canvasSize.width / uvInfo.width, canvasSize.height / uvInfo.height)
     setView({ zoom: scaleAt100, offsetX: 0, offsetY: 0 })
-    setStatus('100% view applied (1 image pixel = 1 CSS pixel).')
+    setStatus('100% 보기로 변경했습니다.')
   }
 
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+  function applyDetectedMasks(image: HTMLImageElement, currentSource?: EyeProjectV5['source']) {
+    try {
+      const detected = detectEyeMasksFromAlpha(image)
+      setProject({ version: 5, masks: detected.masks, design: cloneDesign(CLEAR_DESIGN), source: currentSource })
+      setToolMode('editPoints')
+      setStatus(`눈 위치 자동 인식 완료. ${detected.message} 현재 디자인은 모두 꺼진 클리어 상태입니다.`)
+    } catch (error) {
+      const fallback = createDefaultMasks(image.naturalWidth, image.naturalHeight)
+      setProject({ version: 5, masks: fallback, design: cloneDesign(CLEAR_DESIGN), source: currentSource })
+      setToolMode('moveMask')
+      setStatus(`자동 인식 실패: ${error instanceof Error ? error.message : '알 수 없는 오류'} 수동 마스크를 사용해주세요.`)
+    }
+    historyRef.current = []
+    futureRef.current = []
+  }
+
+  const handleUvFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
     if (file.type !== 'image/png') {
-      setStatus('PNG only. Please choose a PNG UV texture.')
+      setStatus('UV 텍스처는 PNG 파일을 사용해주세요.')
       return
     }
     const url = URL.createObjectURL(file)
     const image = new Image()
     image.onload = () => {
       setImageElement(image)
-      setUvInfo({ name: file.name, width: image.naturalWidth, height: image.naturalHeight, hasAlpha: true })
-      setMasks(createDefaultMasks(image.naturalWidth, image.naturalHeight))
-      setStyles({ left: cloneStyle(DEFAULT_STYLE), right: cloneStyle(DEFAULT_STYLE) })
+      const info = { name: file.name, width: image.naturalWidth, height: image.naturalHeight, hasAlpha: true }
+      setUvInfo(info)
       setView({ zoom: 1, offsetX: 0, offsetY: 0 })
-      setSelectedEye('left')
-      setToolMode('moveMask')
-      setStatus(`Loaded ${file.name}. Use Auto Detect from Alpha if the eyes are isolated by transparency, or place the masks manually.`)
+      setDraftPoints([])
+      setSelectedPointIndex(null)
+      applyDetectedMasks(image, { name: file.name, width: image.naturalWidth, height: image.naturalHeight })
       URL.revokeObjectURL(url)
     }
-    image.onerror = () => setStatus('The PNG could not be decoded.')
+    image.onerror = () => setStatus('PNG 파일을 읽을 수 없습니다.')
     image.src = url
     event.target.value = ''
   }
 
-  const autoDetectMasks = () => {
-    if (!imageElement) return
+  const reDetect = () => {
+    if (!imageElement || !uvInfo) return
+    pushHistory()
     try {
-      const result = detectEyeMasksFromAlpha(imageElement)
-      setMasks(result.masks)
-      setDraftPoints([])
-      setSelectedPointIndex(null)
+      const detected = detectEyeMasksFromAlpha(imageElement)
+      setProject((current) => ({ ...current, masks: detected.masks }))
       setToolMode('editPoints')
-      setStatus(`${result.message} You can refine them with Edit Points.`)
+      setStatus('양쪽 눈 위치를 다시 자동 인식했습니다.')
     } catch (error) {
-      setStatus(`Auto detect failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      setStatus(`자동 인식 실패: ${error instanceof Error ? error.message : '알 수 없는 오류'}`)
     }
   }
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const pixelRatio = window.devicePixelRatio || 1
-    canvas.width = Math.floor(canvasSize.width * pixelRatio)
-    canvas.height = Math.floor(canvasSize.height * pixelRatio)
+    const ratio = window.devicePixelRatio || 1
+    canvas.width = Math.floor(canvasSize.width * ratio)
+    canvas.height = Math.floor(canvasSize.height * ratio)
     canvas.style.width = `${canvasSize.width}px`
     canvas.style.height = `${canvasSize.height}px`
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-
-    ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0)
     ctx.clearRect(0, 0, canvasSize.width, canvasSize.height)
     drawChecker(ctx, canvasSize.width, canvasSize.height)
 
@@ -205,461 +295,296 @@ export default function App() {
     const transform = imageToScreen(0, 0, canvasSize, uvInfo, view)
     ctx.drawImage(imageElement, transform.startX, transform.startY, uvInfo.width * transform.scale, uvInfo.height * transform.scale)
 
-    const leftScreen = maskToScreen(masks.left, canvasSize, uvInfo, view)
-    const rightScreen = maskToScreen(masks.right, canvasSize, uvInfo, view)
-    compositeIrisDesign(ctx, leftScreen, styles.left, canvasSize.width, canvasSize.height)
-    compositeIrisDesign(ctx, rightScreen, styles.right, canvasSize.width, canvasSize.height)
-
-    drawMaskOverlay(ctx, leftScreen, selectedEye === 'left', '#83a9ff', toolMode === 'editPoints' && selectedEye === 'left' ? selectedPointIndex : null)
-    drawMaskOverlay(ctx, rightScreen, selectedEye === 'right', '#ff8fc9', toolMode === 'editPoints' && selectedEye === 'right' ? selectedPointIndex : null)
-    drawDraftPolygon(ctx, draftPoints.map((point: Point) => imagePointToScreen(point, canvasSize, uvInfo, view)), selectedEye === 'left' ? '#83a9ff' : '#ff8fc9')
-  }, [canvasSize, draftPoints, imageElement, masks, selectedEye, selectedPointIndex, styles, toolMode, uvInfo, view])
-
-  const eventImagePoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!uvInfo) return null
-    const rect = event.currentTarget.getBoundingClientRect()
-    return screenToImage(event.clientX - rect.left, event.clientY - rect.top, canvasSize, uvInfo, view)
-  }
+    const leftScreen = maskToScreen(project.masks.left, canvasSize, uvInfo, view)
+    const rightScreen = maskToScreen(project.masks.right, canvasSize, uvInfo, view)
+    compositeEyeDesign(ctx, leftScreen, project.design, canvasSize.width, canvasSize.height, false, overlayElement)
+    compositeEyeDesign(ctx, rightScreen, project.design, canvasSize.width, canvasSize.height, true, overlayElement)
+    drawMaskOverlay(ctx, leftScreen, '#8eb3ff', toolMode === 'editPoints' ? selectedPointIndex : null)
+    drawMaskOverlay(ctx, rightScreen, '#ff9ccf', null)
+    drawDraftPolygon(ctx, draftPoints.map((p) => imagePointToScreen(p, canvasSize, uvInfo, view)))
+  }, [canvasSize, draftPoints, imageElement, overlayElement, project, selectedPointIndex, toolMode, uvInfo, view])
 
   const handleWheel = (event: WheelEvent<HTMLCanvasElement>) => {
     if (!uvInfo || !imageElement) return
     event.preventDefault()
     const rect = event.currentTarget.getBoundingClientRect()
-    const screenX = event.clientX - rect.left
-    const screenY = event.clientY - rect.top
-    const before = screenToImage(screenX, screenY, canvasSize, uvInfo, view)
-    const nextZoom = clamp(view.zoom * (event.deltaY < 0 ? 1.12 : 0.89), 0.08, 30)
+    const sx = event.clientX - rect.left
+    const sy = event.clientY - rect.top
+    const before = screenToImage(sx, sy, canvasSize, uvInfo, view)
+    const nextZoom = clamp(view.zoom * (event.deltaY < 0 ? 1.1 : 0.9), 0.1, 24)
     const nextView = { ...view, zoom: nextZoom }
     const after = imageToScreen(before.x, before.y, canvasSize, uvInfo, nextView)
-    setView({ zoom: nextZoom, offsetX: view.offsetX + (screenX - after.x), offsetY: view.offsetY + (screenY - after.y) })
+    setView({ zoom: nextZoom, offsetX: view.offsetX + sx - after.x, offsetY: view.offsetY + sy - after.y })
   }
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!uvInfo) return
-    const point = eventImagePoint(event)
-    if (!point) return
     const rect = event.currentTarget.getBoundingClientRect()
-    const screenPoint = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+    const sx = event.clientX - rect.left
+    const sy = event.clientY - rect.top
+    const point = screenToImage(sx, sy, canvasSize, uvInfo, view)
 
     if (toolMode === 'pan') {
-      dragRef.current = { type: 'pan', startX: screenPoint.x, startY: screenPoint.y, offsetX: view.offsetX, offsetY: view.offsetY }
+      dragRef.current = { type: 'pan', startX: sx, startY: sy, offsetX: view.offsetX, offsetY: view.offsetY }
       return
     }
 
     if (toolMode === 'ellipse') {
-      dragRef.current = { type: 'ellipse', start: point }
-      setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: makeEllipseMask(point.x, point.y, 2, 2) }))
+      pushHistory()
+      dragRef.current = { type: 'ellipse', start: point, original: deepCloneProject(project) }
       return
     }
 
     if (toolMode === 'polygon') {
       if (draftPoints.length >= 3) {
         const firstScreen = imagePointToScreen(draftPoints[0], canvasSize, uvInfo, view)
-        if (Math.hypot(screenPoint.x - firstScreen.x, screenPoint.y - firstScreen.y) <= 13) {
+        if (Math.hypot(sx - firstScreen.x, sy - firstScreen.y) < 13) {
           completePolygon()
           return
         }
       }
-      setDraftPoints((prev: Point[]) => [...prev, point])
-      setStatus('Polygon point added. Click around the iris; click the first point or Complete when finished.')
+      setDraftPoints((points) => [...points, point])
       return
     }
 
     if (toolMode === 'moveMask') {
-      if (pointInMask(point, selectedMask)) {
-        dragRef.current = { type: 'moveMask', start: point, original: cloneMask(selectedMask) }
-      }
+      pushHistory()
+      dragRef.current = { type: 'moveMask', start: point, original: cloneMask(project.masks.left), originalProject: deepCloneProject(project) }
       return
     }
 
-    if (toolMode === 'editPoints' && selectedMask.type === 'polygon') {
-      const transform = imageToScreen(0, 0, canvasSize, uvInfo, view)
-      const threshold = 14 / transform.scale
-      const nearest = nearestPointIndex(point, selectedMask.points)
-
-      if (event.altKey && nearest.index >= 0 && nearest.distance <= threshold && selectedMask.points.length > 3) {
-        const points = selectedMask.points.filter((_: Point, index: number) => index !== nearest.index)
-        setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
-        setSelectedPointIndex(null)
-        setStatus('Polygon point deleted.')
+    if (toolMode === 'editPoints' && project.masks.left.type === 'polygon') {
+      const screenPoints = project.masks.left.points.map((p) => imagePointToScreen(p, canvasSize, uvInfo, view))
+      const clickScreen = { x: sx, y: sy }
+      const nearest = nearestPointIndex(clickScreen, screenPoints)
+      if (event.altKey && nearest.distance < 14 && project.masks.left.points.length > 3) {
+        pushHistory()
+        const points = project.masks.left.points.filter((_, index) => index !== nearest.index)
+        setProject((current) => ({ ...current, masks: { left: makePolygonMask(points), right: mirrorMask(makePolygonMask(points), uvInfo.width) } }))
         return
       }
-
       if (event.shiftKey) {
-        const segment = nearestSegmentIndex(point, selectedMask.points)
-        if (segment.index >= 0 && segment.distance <= threshold * 1.5) {
-          const points = [...selectedMask.points]
+        const segment = nearestSegmentIndex(clickScreen, screenPoints)
+        if (segment.distance < 18) {
+          pushHistory()
+          const points = [...project.masks.left.points]
           points.splice(segment.index + 1, 0, point)
-          setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
-          setSelectedPointIndex(segment.index + 1)
-          setStatus('Polygon point inserted. Drag it to refine the edge.')
+          const left = { ...makePolygonMask(points), feather: project.masks.left.feather }
+          setProject((current) => ({ ...current, masks: { left, right: mirrorMask(left, uvInfo.width) } }))
           return
         }
       }
-
-      if (nearest.index >= 0 && nearest.distance <= threshold) {
+      if (nearest.distance < 14) {
+        pushHistory()
         setSelectedPointIndex(nearest.index)
-        dragRef.current = { type: 'point', index: nearest.index }
-      } else {
-        setSelectedPointIndex(null)
+        dragRef.current = { type: 'point', index: nearest.index, originalProject: deepCloneProject(project) }
       }
     }
   }
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!uvInfo || !dragRef.current) return
-    const point = eventImagePoint(event)
-    if (!point) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const sx = event.clientX - rect.left
+    const sy = event.clientY - rect.top
+    const point = screenToImage(sx, sy, canvasSize, uvInfo, view)
     const drag = dragRef.current
 
     if (drag.type === 'pan') {
-      const rect = event.currentTarget.getBoundingClientRect()
-      const screenX = event.clientX - rect.left
-      const screenY = event.clientY - rect.top
-      setView((prev: ViewState) => ({ ...prev, offsetX: drag.offsetX + (screenX - drag.startX), offsetY: drag.offsetY + (screenY - drag.startY) }))
-      return
-    }
-
-    if (drag.type === 'ellipse') {
-      const minX = Math.min(drag.start.x, point.x)
-      const maxX = Math.max(drag.start.x, point.x)
-      const minY = Math.min(drag.start.y, point.y)
-      const maxY = Math.max(drag.start.y, point.y)
-      setMasks((prev: Record<EyeSide, EyeMask>) => ({
-        ...prev,
-        [selectedEye]: makeEllipseMask((minX + maxX) / 2, (minY + maxY) / 2, Math.max(2, (maxX - minX) / 2), Math.max(2, (maxY - minY) / 2)),
-      }))
-      return
-    }
-
-    if (drag.type === 'moveMask') {
+      setView((current) => ({ ...current, offsetX: drag.offsetX + sx - drag.startX, offsetY: drag.offsetY + sy - drag.startY }))
+    } else if (drag.type === 'ellipse') {
+      const cx = (drag.start.x + point.x) / 2
+      const cy = (drag.start.y + point.y) / 2
+      const rx = Math.abs(point.x - drag.start.x) / 2
+      const ry = Math.abs(point.y - drag.start.y) / 2
+      const left = makeEllipseMask(cx, cy, Math.max(2, rx), Math.max(2, ry))
+      setProject((current) => ({ ...current, masks: { left, right: mirrorMask(left, uvInfo.width) } }))
+    } else if (drag.type === 'moveMask') {
       const dx = point.x - drag.start.x
       const dy = point.y - drag.start.y
-      setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: translateMask(drag.original, dx, dy) }))
-      return
-    }
-
-    if (drag.type === 'point' && selectedMask.type === 'polygon') {
-      const points = selectedMask.points.map((candidate: Point, index: number) => index === drag.index ? { ...point } : candidate)
-      setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
+      const left = translateMask(drag.original, dx, dy)
+      setProject((current) => ({ ...current, masks: { left, right: mirrorMask(left, uvInfo.width) } }))
+    } else if (drag.type === 'point' && project.masks.left.type === 'polygon') {
+      const points = project.masks.left.points.map((p, index) => index === drag.index ? { x: clamp(point.x, 0, uvInfo.width), y: clamp(point.y, 0, uvInfo.height) } : p)
+      const left = { ...makePolygonMask(points), feather: project.masks.left.feather }
+      setProject((current) => ({ ...current, masks: { left, right: mirrorMask(left, uvInfo.width) } }))
     }
   }
 
   const handlePointerUp = () => {
-    if (dragRef.current?.type === 'ellipse') setStatus('Ellipse mask created. Use Move Mask or redraw it if needed.')
     dragRef.current = null
   }
 
-  const completePolygon = () => {
-    if (draftPoints.length < 3) {
-      setStatus('Polygon needs at least 3 points.')
-      return
-    }
-    const feather = selectedMask.feather
-    setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...makePolygonMask(draftPoints), feather } }))
+  function completePolygon() {
+    if (!uvInfo || draftPoints.length < 3) return
+    pushHistory()
+    const left = makePolygonMask(draftPoints)
+    setProject((current) => ({ ...current, masks: { left, right: mirrorMask(left, uvInfo.width) } }))
     setDraftPoints([])
     setToolMode('editPoints')
-    setStatus('Polygon mask completed. Drag points; Shift+click edge adds a point; Alt+click point deletes it.')
+    setStatus('다각형 마스크를 완성했습니다. 오른쪽 눈에도 대칭 적용되었습니다.')
   }
 
-  const deleteSelectedPoint = () => {
-    if (selectedMask.type !== 'polygon' || selectedPointIndex === null || selectedMask.points.length <= 3) return
-    const points = selectedMask.points.filter((_: Point, index: number) => index !== selectedPointIndex)
-    setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
-    setSelectedPointIndex(null)
-    setStatus('Selected polygon point deleted.')
-  }
-
-  const updateMaskFeather = (value: number) => {
-    setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...prev[selectedEye], feather: Math.max(0, value) } as EyeMask }))
-  }
-
-  const updateEllipse = (key: 'cx' | 'cy' | 'rx' | 'ry' | 'rotation', value: number) => {
-    if (selectedMask.type !== 'ellipse') return
-    setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...selectedMask, [key]: value } }))
-  }
-
-  const updateStyleSection = (section: keyof EyeStyle, key: string, value: unknown) => {
-    setStyles((prev: Record<EyeSide, EyeStyle>) => {
-      const selected = cloneStyle(prev[selectedEye])
-      const target = selected[section]
-      if (typeof target === 'object' && target !== null) {
-        ;(target as unknown as Record<string, unknown>)[key] = value
-      } else if (section === 'opacity' && typeof value === 'number') {
-        selected.opacity = value
-      }
-
-      if (!linkEyes) return { ...prev, [selectedEye]: selected }
-      const otherEye: EyeSide = selectedEye === 'left' ? 'right' : 'left'
-      const other = cloneStyle(prev[otherEye])
-      const otherTarget = other[section]
-      if (typeof otherTarget === 'object' && otherTarget !== null) {
-        ;(otherTarget as unknown as Record<string, unknown>)[key] = value
-      } else if (section === 'opacity' && typeof value === 'number') {
-        other.opacity = value
-      }
-      return { ...prev, [selectedEye]: selected, [otherEye]: other }
+  function updateMaskFeather(value: number) {
+    if (!uvInfo) return
+    setProject((current) => {
+      const left = { ...current.masks.left, feather: value } as EyeMask
+      return { ...current, masks: { left, right: { ...mirrorMask(left, uvInfo.width), feather: value } as EyeMask } }
     })
   }
 
-  const updateOpacity = (value: number) => {
-    setStyles((prev: Record<EyeSide, EyeStyle>) => {
-      const selected = cloneStyle(prev[selectedEye]); selected.opacity = value
-      if (!linkEyes) return { ...prev, [selectedEye]: selected }
-      const otherEye: EyeSide = selectedEye === 'left' ? 'right' : 'left'
-      const other = cloneStyle(prev[otherEye]); other.opacity = value
-      return { ...prev, [selectedEye]: selected, [otherEye]: other }
-    })
+  const exportFull = () => {
+    if (!imageElement || !uvInfo) return
+    const data = exportFullUvPng(imageElement, project.masks, project.design, overlayElement)
+    downloadDataUrl(data, `${uvInfo.name.replace(/\.png$/i, '')}-v05-eye.png`)
+    setStatus('전체 UV PNG를 저장했습니다.')
   }
 
-  const applyStyle = (style: EyeStyle) => {
-    setStyles((prev: Record<EyeSide, EyeStyle>) => {
-      if (!linkEyes) return { ...prev, [selectedEye]: cloneStyle(style) }
-      return { left: cloneStyle(style), right: cloneStyle(style) }
-    })
+  const exportEye = () => {
+    const data = exportEyePng(project.masks.left, project.design, overlayElement)
+    downloadDataUrl(data, 'iris-v05.png')
+    setStatus('눈동자 PNG를 저장했습니다.')
   }
 
-  const applyPatch = (patch: Parameters<typeof applyStylePatch>[1], label: string) => {
-    setStyles((prev: Record<EyeSide, EyeStyle>) => {
-      const nextSelected = applyStylePatch(prev[selectedEye], patch)
-      if (!linkEyes) return { ...prev, [selectedEye]: nextSelected }
-      const otherEye: EyeSide = selectedEye === 'left' ? 'right' : 'left'
-      const nextOther = applyStylePatch(prev[otherEye], patch)
-      return { ...prev, [selectedEye]: nextSelected, [otherEye]: nextOther }
-    })
-    setStatus(`${label} preset applied${linkEyes ? ' to both eyes' : ` to ${selectedEye}`}.`)
+  const saveProject = () => {
+    downloadText(JSON.stringify(project, null, 2), 'uv-eye-project-v0.5.json')
+    setStatus('프로젝트 JSON을 저장했습니다.')
   }
 
-  const applyPreset = (name: string) => {
-    applyStyle(PRESETS[name])
-    setStatus(`Full eye preset applied: ${name}`)
-  }
-
-  const randomize = (randomSeed = seed) => {
-    const next = randomizeStyle(selectedStyle, randomSeed, randomOptions)
-    applyStyle(next)
-    setStatus(`Generated design from seed ${randomSeed}. Same seed + same options = same result.`)
-  }
-
-  const makeProjectSettings = (): SavedProjectSettings => ({
-    version: 4,
-    seed,
-    linkEyes,
-    selectedEye,
-    masks: { left: cloneMask(masks.left), right: cloneMask(masks.right) },
-    styles: { left: cloneStyle(styles.left), right: cloneStyle(styles.right) },
-    source: uvInfo ? { name: uvInfo.name, width: uvInfo.width, height: uvInfo.height } : undefined,
-  })
-
-  const applyProjectSettings = (data: SavedProjectSettings) => {
-    const safe = deepProjectClone(data)
-    setSeed(safe.seed)
-    setLinkEyes(safe.linkEyes)
-    setSelectedEye(safe.selectedEye ?? 'left')
-    setMasks(safe.masks)
-    setStyles(safe.styles)
-    setDraftPoints([])
-    setSelectedPointIndex(null)
-  }
-
-  const saveLocal = () => {
-    localStorage.setItem('uv-eye-studio-v04-settings', JSON.stringify(makeProjectSettings()))
-    setStatus('Project settings saved in this browser. The source PNG is not embedded.')
-  }
-
-  const loadLocal = () => {
-    const raw = localStorage.getItem('uv-eye-studio-v04-settings')
-    if (!raw) {
-      setStatus('No v0.4 browser save found.')
-      return
-    }
-    try {
-      const data = JSON.parse(raw) as SavedProjectSettings
-      if (data.version !== 4) throw new Error('Wrong project version')
-      applyProjectSettings(data)
-      setStatus('Browser save loaded. Re-open the matching PNG if necessary.')
-    } catch {
-      setStatus('Browser save is invalid or incompatible.')
-    }
-  }
-
-  const exportProjectJson = () => {
-    downloadText(JSON.stringify(makeProjectSettings(), null, 2), 'uv-eye-project-v0.4.json')
-    setStatus('Project JSON exported. It stores masks/design settings, not the PNG pixels.')
-  }
-
-  const handleProjectImport = (event: ChangeEvent<HTMLInputElement>) => {
+  const loadProjectFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
     const reader = new FileReader()
     reader.onload = () => {
       try {
-        const data = JSON.parse(String(reader.result)) as SavedProjectSettings
-        if (data.version !== 4 || !data.masks || !data.styles) throw new Error('Invalid v0.4 project')
-        applyProjectSettings(data)
-        setStatus('Project JSON imported.')
-      } catch {
-        setStatus('Could not import that file. Please use a v0.4 project JSON.')
+        const parsed = JSON.parse(String(reader.result)) as EyeProjectV5
+        if (parsed.version !== 5 || !parsed.masks || !parsed.design) throw new Error('v0.5 프로젝트 파일이 아닙니다.')
+        pushHistory()
+        setProject(parsed)
+        setStatus('v0.5 프로젝트 설정을 불러왔습니다. 원본 UV가 다르면 다시 열어주세요.')
+      } catch (error) {
+        setStatus(`프로젝트 불러오기 실패: ${error instanceof Error ? error.message : '파일 오류'}`)
       }
     }
     reader.readAsText(file)
     event.target.value = ''
   }
 
-  const exportFull = () => {
-    if (!imageElement || !uvInfo) return
-    try {
-      const dataUrl = exportFullUvPng(imageElement, masks, styles)
-      downloadDataUrl(dataUrl, uvInfo.name.replace(/\.png$/i, '') + '-v04-eyes.png')
-      setStatus('Full UV PNG exported at the original resolution. Drawing is clipped inside the hard masks.')
-    } catch (error) {
-      setStatus(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
-    }
+  const saveBrowser = () => {
+    localStorage.setItem('uv-eye-studio-v05-project', JSON.stringify(project))
+    setStatus('현재 설정을 이 브라우저에 저장했습니다.')
   }
 
-  const exportSelected = () => {
+  const loadBrowser = () => {
+    const raw = localStorage.getItem('uv-eye-studio-v05-project')
+    if (!raw) { setStatus('브라우저에 저장된 v0.5 설정이 없습니다.'); return }
     try {
-      downloadDataUrl(exportSingleIrisPng(selectedMask, selectedStyle), `${selectedEye}-iris-v04.png`)
-      setStatus(`${selectedEye} iris exported on a transparent background.`)
-    } catch (error) {
-      setStatus(`Iris export failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
-    }
+      pushHistory()
+      setProject(JSON.parse(raw) as EyeProjectV5)
+      setStatus('브라우저 저장 설정을 불러왔습니다.')
+    } catch { setStatus('브라우저 저장 데이터를 읽지 못했습니다.') }
   }
 
-  const copyStyle = (from: EyeSide, to: EyeSide) => {
-    setStyles((prev: Record<EyeSide, EyeStyle>) => ({ ...prev, [to]: cloneStyle(prev[from]) }))
-    setStatus(`Copied ${from} iris design to ${to}. Mask position was not copied.`)
+  const loadOverlayImage = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (!['image/png', 'image/webp', 'image/jpeg'].includes(file.type)) {
+      setStatus('문양 이미지는 PNG / WEBP / JPG를 사용해주세요.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      updateDesign('overlayImage', { enabled: true, src: String(reader.result), name: file.name, opacity: 0.65 }, true)
+      setCategory('overlayImage')
+      setStatus(`${file.name} 문양 이미지를 불러왔습니다.`)
+    }
+    reader.readAsDataURL(file)
+    event.target.value = ''
+  }
+
+  const clearAllDesign = () => {
+    commitProject((current) => ({ ...current, design: cloneDesign(CLEAR_DESIGN) }))
+    setStatus('모든 디자인 요소를 껐습니다. 마스크만 남은 클리어 상태입니다.')
   }
 
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand-block">
-          <div className="app-title">UV Eye Texture Studio <span>v0.4</span></div>
-          <div className="app-subtitle">Alpha auto-detect + detailed element preset libraries for building richer iris UVs</div>
+        <div>
+          <div className="app-title">UV Eye Texture Studio <span>v0.5</span></div>
+          <div className="app-subtitle">양안 대칭 · 세부 요소 조합형 UV 눈동자 편집기</div>
         </div>
         <div className="topbar-actions">
-          <button className="primary" onClick={() => fileInputRef.current?.click()}>Open UV Texture</button>
-          <button onClick={autoDetectMasks} disabled={!canEdit}>Auto Detect Eyes</button>
-          <button onClick={fitView} disabled={!canEdit}>Fit</button>
+          <button className="primary" onClick={() => uvInputRef.current?.click()}>UV 텍스처 열기</button>
+          <button onClick={reDetect} disabled={!canEdit}>눈 위치 자동 인식</button>
+          <button onClick={fitView} disabled={!canEdit}>맞춤</button>
           <button onClick={resetTo100} disabled={!canEdit}>100%</button>
-          <button onClick={exportSelected} disabled={!canEdit}>Export Eye</button>
-          <button className="success" onClick={exportFull} disabled={!canEdit}>Export Full PNG</button>
+          <button onClick={undo} disabled={historyRef.current.length === 0}>실행 취소</button>
+          <button onClick={redo} disabled={futureRef.current.length === 0}>다시 실행</button>
+          <button onClick={exportFull} disabled={!canEdit}>전체 PNG 저장</button>
         </div>
       </header>
 
-      <input ref={fileInputRef} hidden type="file" accept="image/png" onChange={handleFileChange} />
-      <input ref={projectInputRef} hidden type="file" accept="application/json,.json" onChange={handleProjectImport} />
+      <input ref={uvInputRef} type="file" accept="image/png" hidden onChange={handleUvFile} />
+      <input ref={projectInputRef} type="file" accept="application/json,.json" hidden onChange={loadProjectFile} />
+      <input ref={overlayInputRef} type="file" accept="image/png,image/webp,image/jpeg" hidden onChange={loadOverlayImage} />
 
       <div className="workspace">
         <aside className="leftbar panel">
+          <div className="notice-card">
+            <strong>양안 동시 적용</strong>
+            <p>왼쪽 기준 마스크와 디자인을 수정하면 오른쪽 눈에 자동으로 대칭 적용됩니다.</p>
+          </div>
+
           <section>
-            <h3>Mask Tools</h3>
+            <h3>마스크 도구</h3>
             <div className="tool-grid">
               {(Object.keys(TOOL_LABELS) as ToolMode[]).map((tool) => (
-                <button key={tool} className={toolMode === tool ? 'active' : ''} onClick={() => { setToolMode(tool); setStatus(toolHelp(tool)) }}>
-                  {TOOL_LABELS[tool]}
-                </button>
+                <button key={tool} className={toolMode === tool ? 'active' : ''} onClick={() => { setToolMode(tool); setCategory('mask') }} disabled={!canEdit}>{TOOL_LABELS[tool]}</button>
               ))}
-            </div>
-            <div className="button-grid two-col">
-              <button onClick={autoDetectMasks} disabled={!canEdit}>Detect from Alpha</button>
-              <button onClick={() => { setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: createDefaultMasks(uvInfo?.width ?? 1024, uvInfo?.height ?? 1024)[selectedEye] })); setStatus('Selected eye mask reset to a default ellipse.') }} disabled={!canEdit}>Reset Eye Mask</button>
             </div>
             {toolMode === 'polygon' && (
-              <div className="subpanel polygon-actions">
-                <strong>Polygon: {draftPoints.length} points</strong>
-                <div className="button-grid two-col">
-                  <button onClick={() => setDraftPoints((prev) => prev.slice(0, -1))} disabled={draftPoints.length === 0}>Undo Point</button>
-                  <button onClick={completePolygon} disabled={draftPoints.length < 3}>Complete</button>
-                </div>
-                <button className="wide-button" onClick={() => setDraftPoints([])} disabled={draftPoints.length === 0}>Cancel Draft</button>
-              </div>
-            )}
-            {toolMode === 'editPoints' && selectedMask.type === 'polygon' && (
-              <div className="hint-box">
-                Drag point = move<br />Shift + click edge = add point<br />Alt + click point = delete
-                <button className="wide-button compact" disabled={selectedPointIndex === null || selectedMask.points.length <= 3} onClick={deleteSelectedPoint}>Delete Selected Point</button>
+              <div className="button-grid two-col">
+                <button onClick={() => setDraftPoints((p) => p.slice(0, -1))}>마지막 점 취소</button>
+                <button onClick={completePolygon} disabled={draftPoints.length < 3}>마스크 완료</button>
               </div>
             )}
           </section>
 
           <section>
-            <h3>Eyes</h3>
-            <div className="segmented">
-              <button className={selectedEye === 'left' ? 'active' : ''} onClick={() => setSelectedEye('left')}>Left</button>
-              <button className={selectedEye === 'right' ? 'active' : ''} onClick={() => setSelectedEye('right')}>Right</button>
-            </div>
-            <label className="check-row"><input type="checkbox" checked={linkEyes} onChange={(e: ChangeEvent<HTMLInputElement>) => setLinkEyes(e.target.checked)} />Link design changes</label>
-            <div className="button-grid two-col">
-              <button onClick={() => copyStyle('left', 'right')}>L → R design</button>
-              <button onClick={() => copyStyle('right', 'left')}>R → L design</button>
-            </div>
-          </section>
-
-          <section>
-            <h3>Detailed Element Presets</h3>
-            <div className="preset-library">
-              <PresetGroup title="Background / Gradient" items={BASE_PRESETS} onApply={(name, patch) => applyPatch(patch, `Gradient · ${name}`)} />
-              <PresetGroup title="Lower Point Motifs" items={LOWER_MOTIF_PRESETS} onApply={(name, patch) => applyPatch(patch, `Lower motif · ${name}`)} />
-              <PresetGroup title="Pupil Shapes" items={PUPIL_PRESETS} onApply={(name, patch) => applyPatch(patch, `Pupil · ${name}`)} />
-              <PresetGroup title="Upper Shadow / Lash Reflection" items={UPPER_ACCENT_PRESETS} onApply={(name, patch) => applyPatch(patch, `Upper accent · ${name}`)} />
-              <PresetGroup title="Reflection Presets" items={REFLECTION_PRESETS} onApply={(name, patch) => applyPatch(patch, `Reflection · ${name}`)} />
-              <PresetGroup title="Highlight Presets" items={HIGHLIGHT_PRESET_PATCHES} onApply={(name, patch) => applyPatch(patch, `Highlight · ${name}`)} />
-              <PresetGroup title="Particle Presets" items={PARTICLE_PRESETS} onApply={(name, patch) => applyPatch(patch, `Particles · ${name}`)} />
-            </div>
-          </section>
-
-          <section>
-            <h3>Optional Full Eye Presets</h3>
-            <div className="preset-grid">
-              {Object.keys(PRESETS).map((name) => <button key={name} onClick={() => applyPreset(name)}>{name}</button>)}
-            </div>
-          </section>
-
-          <section>
-            <h3>Seed Random</h3>
-            <NumberField label="Seed" value={seed} step={1} min={0} max={999999999} onChange={setSeed} />
-            <div className="random-options">
-              {(Object.keys(randomOptions) as (keyof RandomOptions)[]).map((key) => (
-                <label className="check-row mini" key={key}><input type="checkbox" checked={randomOptions[key]} onChange={(e: ChangeEvent<HTMLInputElement>) => setRandomOptions((prev: RandomOptions) => ({ ...prev, [key]: e.target.checked }))} />{key}</label>
+            <h3>디자인 요소</h3>
+            <div className="category-list">
+              {(Object.keys(CATEGORY_LABELS) as Category[]).filter((c) => c !== 'mask').map((item) => (
+                <button key={item} className={category === item ? 'active' : ''} onClick={() => setCategory(item)}>{CATEGORY_LABELS[item]}</button>
               ))}
             </div>
+          </section>
+
+          <section>
+            <h3>빠른 초기화</h3>
+            <button className="danger-soft full" onClick={clearAllDesign}>모든 디자인 끄기</button>
+          </section>
+
+          <section>
+            <h3>프로젝트</h3>
             <div className="button-grid two-col">
-              <button onClick={() => randomize()}>Randomize</button>
-              <button onClick={() => { const next = Math.floor(Math.random() * 999999999); setSeed(next); randomize(next) }}>New Seed</button>
+              <button onClick={saveProject}>JSON 저장</button>
+              <button onClick={() => projectInputRef.current?.click()}>JSON 불러오기</button>
+              <button onClick={saveBrowser}>브라우저 저장</button>
+              <button onClick={loadBrowser}>브라우저 불러오기</button>
             </div>
-          </section>
-
-          <section>
-            <h3>Project</h3>
-            <div className="button-grid">
-              <button onClick={saveLocal}>Save in Browser</button>
-              <button onClick={loadLocal}>Load Browser Save</button>
-              <button onClick={exportProjectJson}>Export Project JSON</button>
-              <button onClick={() => projectInputRef.current?.click()}>Import Project JSON</button>
-            </div>
-          </section>
-
-          <section>
-            <h3>Source</h3>
-            {uvInfo ? <div className="info-list">
-              <div><span>Name</span><strong>{uvInfo.name}</strong></div>
-              <div><span>Resolution</span><strong>{uvInfo.width} × {uvInfo.height}</strong></div>
-              <div><span>Mask</span><strong>{selectedMask.type}</strong></div>
-            </div> : <p className="muted">No PNG loaded.</p>}
           </section>
         </aside>
 
         <main className="canvas-panel panel">
           <div className="canvas-toolbar">
-            <div className="badge">{selectedEye.toUpperCase()} · {TOOL_LABELS[toolMode]}</div>
+            <div className="badge">현재 도구: {TOOL_LABELS[toolMode]}</div>
             <div className="canvas-zoom-group">
-              <button disabled={!canEdit} onClick={() => setView((v: ViewState) => ({ ...v, zoom: clamp(v.zoom * 0.9, 0.08, 30) }))}>−</button>
+              <button onClick={() => setView((v) => ({ ...v, zoom: clamp(v.zoom * 0.9, 0.1, 24) }))} disabled={!canEdit}>−</button>
               <span>{zoomLabel}</span>
-              <button disabled={!canEdit} onClick={() => setView((v: ViewState) => ({ ...v, zoom: clamp(v.zoom * 1.1, 0.08, 30) }))}>+</button>
-              <button disabled={!canEdit} onClick={fitView}>Fit</button>
-              <button disabled={!canEdit} onClick={resetTo100}>100%</button>
+              <button onClick={() => setView((v) => ({ ...v, zoom: clamp(v.zoom * 1.1, 0.1, 24) }))} disabled={!canEdit}>+</button>
+              <button onClick={fitView} disabled={!canEdit}>맞춤</button>
+              <button onClick={exportEye} disabled={!canEdit}>눈만 저장</button>
             </div>
           </div>
           <div ref={canvasHostRef} className="canvas-host">
@@ -670,283 +595,202 @@ export default function App() {
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerLeave={handlePointerUp}
-              onContextMenu={(event: ReactMouseEvent<HTMLCanvasElement>) => event.preventDefault()}
             />
           </div>
-          <div className="statusbar"><span>{status}</span><span>Mouse wheel: zoom · Auto Detect works best when each eye UV is isolated by transparency</span></div>
+          <div className="statusbar"><span>{status}</span><span>{uvInfo ? `${uvInfo.name} · ${uvInfo.width}×${uvInfo.height}` : 'PNG를 열면 투명 영역 기준으로 눈 위치를 자동 인식합니다.'}</span></div>
         </main>
 
         <aside className="rightbar panel">
-          <details open>
-            <summary>Mask Editor</summary>
-            <div className="section-body">
-              <div className="info-chip">Type: {selectedMask.type}</div>
-              <RangeField label="Feather (inward px)" value={selectedMask.feather} min={0} max={uvInfo ? Math.max(2, Math.min(80, Math.min(uvInfo.width, uvInfo.height) * 0.03)) : 80} step={0.5} onChange={updateMaskFeather} />
-              {selectedMask.type === 'ellipse' ? (
-                <div className="field-grid two">
-                  <NumberField label="Center X" value={selectedMask.cx} min={0} max={uvInfo?.width ?? 99999} step={1} onChange={(v) => updateEllipse('cx', v)} />
-                  <NumberField label="Center Y" value={selectedMask.cy} min={0} max={uvInfo?.height ?? 99999} step={1} onChange={(v) => updateEllipse('cy', v)} />
-                  <NumberField label="Radius X" value={selectedMask.rx} min={1} max={uvInfo?.width ?? 99999} step={1} onChange={(v) => updateEllipse('rx', v)} />
-                  <NumberField label="Radius Y" value={selectedMask.ry} min={1} max={uvInfo?.height ?? 99999} step={1} onChange={(v) => updateEllipse('ry', v)} />
-                  <NumberField label="Rotation rad" value={selectedMask.rotation} min={-Math.PI} max={Math.PI} step={0.01} onChange={(v) => updateEllipse('rotation', v)} />
-                </div>
-              ) : (
-                <div className="hint-box">{selectedMask.points.length} polygon points. Use <b>Edit Points</b> on the left for precise correction.</div>
-              )}
-            </div>
-          </details>
-
-          <details open>
-            <summary>Base · 5-stop Gradient</summary>
-            <div className="section-body">
-              <Toggle label="Gradient" checked={selectedStyle.gradient.enabled} onChange={(v) => updateStyleSection('gradient', 'enabled', v)} />
-              <div className="color-grid">
-                <ColorField label="Top" value={selectedStyle.gradient.top} onChange={(v) => updateStyleSection('gradient', 'top', v)} />
-                <ColorField label="Upper Mid" value={selectedStyle.gradient.upperMid} onChange={(v) => updateStyleSection('gradient', 'upperMid', v)} />
-                <ColorField label="Middle" value={selectedStyle.gradient.mid} onChange={(v) => updateStyleSection('gradient', 'mid', v)} />
-                <ColorField label="Lower Mid" value={selectedStyle.gradient.lowerMid} onChange={(v) => updateStyleSection('gradient', 'lowerMid', v)} />
-                <ColorField label="Bottom" value={selectedStyle.gradient.bottom} onChange={(v) => updateStyleSection('gradient', 'bottom', v)} />
-              </div>
-              <RangeField label="Overall Opacity" value={selectedStyle.opacity} min={0} max={1} step={0.01} onChange={updateOpacity} />
-            </div>
-          </details>
-
-          <details open>
-            <summary>Depth · Rings · Pupil</summary>
-            <div className="section-body">
-              <LayerToggle title="Upper Shadow" checked={selectedStyle.upperShadow.enabled} onChange={(v) => updateStyleSection('upperShadow', 'enabled', v)}>
-                <ColorField label="Color" value={selectedStyle.upperShadow.color} onChange={(v) => updateStyleSection('upperShadow', 'color', v)} />
-                <RangeField label="Intensity" value={selectedStyle.upperShadow.intensity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('upperShadow', 'intensity', v)} />
-                <RangeField label="Height" value={selectedStyle.upperShadow.height} min={0.15} max={0.9} step={0.01} onChange={(v) => updateStyleSection('upperShadow', 'height', v)} />
-                <RangeField label="Softness" value={selectedStyle.upperShadow.softness} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('upperShadow', 'softness', v)} />
-              </LayerToggle>
-              <LayerToggle title="Lower Glow" checked={selectedStyle.lowerGlow.enabled} onChange={(v) => updateStyleSection('lowerGlow', 'enabled', v)}>
-                <ColorField label="Color" value={selectedStyle.lowerGlow.color} onChange={(v) => updateStyleSection('lowerGlow', 'color', v)} />
-                <RangeField label="Intensity" value={selectedStyle.lowerGlow.intensity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('lowerGlow', 'intensity', v)} />
-                <RangeField label="Spread" value={selectedStyle.lowerGlow.spread} min={0.1} max={1} step={0.01} onChange={(v) => updateStyleSection('lowerGlow', 'spread', v)} />
-              </LayerToggle>
-              <LayerToggle title="Outer Ring" checked={selectedStyle.outerRing.enabled} onChange={(v) => updateStyleSection('outerRing', 'enabled', v)}>
-                <ColorField label="Color" value={selectedStyle.outerRing.color} onChange={(v) => updateStyleSection('outerRing', 'color', v)} />
-                <RangeField label="Thickness" value={selectedStyle.outerRing.thickness} min={0.01} max={0.2} step={0.005} onChange={(v) => updateStyleSection('outerRing', 'thickness', v)} />
-                <RangeField label="Opacity" value={selectedStyle.outerRing.opacity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('outerRing', 'opacity', v)} />
-              </LayerToggle>
-              <LayerToggle title="Inner Ring" checked={selectedStyle.innerRing.enabled} onChange={(v) => updateStyleSection('innerRing', 'enabled', v)}>
-                <ColorField label="Color" value={selectedStyle.innerRing.color} onChange={(v) => updateStyleSection('innerRing', 'color', v)} />
-                <RangeField label="Radius" value={selectedStyle.innerRing.radius} min={0.12} max={0.7} step={0.01} onChange={(v) => updateStyleSection('innerRing', 'radius', v)} />
-                <RangeField label="Thickness" value={selectedStyle.innerRing.thickness} min={0.005} max={0.14} step={0.005} onChange={(v) => updateStyleSection('innerRing', 'thickness', v)} />
-              </LayerToggle>
-              <LayerToggle title="Extra Inner Ring" checked={selectedStyle.extraInnerRing.enabled} onChange={(v) => updateStyleSection('extraInnerRing', 'enabled', v)}>
-                <ColorField label="Color" value={selectedStyle.extraInnerRing.color} onChange={(v) => updateStyleSection('extraInnerRing', 'color', v)} />
-                <RangeField label="Radius" value={selectedStyle.extraInnerRing.radius} min={0.18} max={0.86} step={0.01} onChange={(v) => updateStyleSection('extraInnerRing', 'radius', v)} />
-                <RangeField label="Thickness" value={selectedStyle.extraInnerRing.thickness} min={0.005} max={0.1} step={0.005} onChange={(v) => updateStyleSection('extraInnerRing', 'thickness', v)} />
-              </LayerToggle>
-              <LayerToggle title="Pupil" checked={selectedStyle.pupil.enabled} onChange={(v) => updateStyleSection('pupil', 'enabled', v)}>
-                <SelectField label="Shape" value={selectedStyle.pupil.shape} options={PUPIL_SHAPES} onChange={(v) => updateStyleSection('pupil', 'shape', v)} />
-                <ColorField label="Color" value={selectedStyle.pupil.color} onChange={(v) => updateStyleSection('pupil', 'color', v)} />
-                <RangeField label="Scale X" value={selectedStyle.pupil.scaleX} min={0.04} max={0.55} step={0.01} onChange={(v) => updateStyleSection('pupil', 'scaleX', v)} />
-                <RangeField label="Scale Y" value={selectedStyle.pupil.scaleY} min={0.05} max={0.62} step={0.01} onChange={(v) => updateStyleSection('pupil', 'scaleY', v)} />
-                <RangeField label="Position Y" value={selectedStyle.pupil.y} min={0.25} max={0.75} step={0.01} onChange={(v) => updateStyleSection('pupil', 'y', v)} />
-                <RangeField label="Softness" value={selectedStyle.pupil.softness} min={0} max={0.2} step={0.01} onChange={(v) => updateStyleSection('pupil', 'softness', v)} />
-              </LayerToggle>
-            </div>
-          </details>
-
-          <details>
-            <summary>Texture · Radial · Particles</summary>
-            <div className="section-body">
-              <LayerToggle title="Radial Texture" checked={selectedStyle.radial.enabled} onChange={(v) => updateStyleSection('radial', 'enabled', v)}>
-                <ColorField label="Color" value={selectedStyle.radial.color} onChange={(v) => updateStyleSection('radial', 'color', v)} />
-                <RangeField label="Strength" value={selectedStyle.radial.strength} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('radial', 'strength', v)} />
-                <RangeField label="Density" value={selectedStyle.radial.density} min={6} max={70} step={1} onChange={(v) => updateStyleSection('radial', 'density', Math.round(v))} />
-                <RangeField label="Length" value={selectedStyle.radial.length} min={0.2} max={1} step={0.01} onChange={(v) => updateStyleSection('radial', 'length', v)} />
-                <RangeField label="Randomness" value={selectedStyle.radial.randomness} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('radial', 'randomness', v)} />
-              </LayerToggle>
-              <LayerToggle title="Soft Texture" checked={selectedStyle.softTexture.enabled} onChange={(v) => updateStyleSection('softTexture', 'enabled', v)}>
-                <ColorField label="Color" value={selectedStyle.softTexture.color} onChange={(v) => updateStyleSection('softTexture', 'color', v)} />
-                <RangeField label="Strength" value={selectedStyle.softTexture.strength} min={0} max={0.45} step={0.01} onChange={(v) => updateStyleSection('softTexture', 'strength', v)} />
-                <RangeField label="Amount" value={selectedStyle.softTexture.amount} min={0} max={70} step={1} onChange={(v) => updateStyleSection('softTexture', 'amount', Math.round(v))} />
-              </LayerToggle>
-              <LayerToggle title="Particles" checked={selectedStyle.particles.enabled} onChange={(v) => updateStyleSection('particles', 'enabled', v)}>
-                <SelectField label="Type" value={selectedStyle.particles.type} options={PARTICLE_TYPES} onChange={(v) => updateStyleSection('particles', 'type', v)} />
-                <ColorField label="Color" value={selectedStyle.particles.color} onChange={(v) => updateStyleSection('particles', 'color', v)} />
-                <RangeField label="Count" value={selectedStyle.particles.count} min={0} max={30} step={1} onChange={(v) => updateStyleSection('particles', 'count', Math.round(v))} />
-                <RangeField label="Size Min" value={selectedStyle.particles.sizeMin} min={0.001} max={0.04} step={0.001} onChange={(v) => updateStyleSection('particles', 'sizeMin', v)} />
-                <RangeField label="Size Max" value={selectedStyle.particles.sizeMax} min={0.001} max={0.05} step={0.001} onChange={(v) => updateStyleSection('particles', 'sizeMax', v)} />
-              </LayerToggle>
-            </div>
-          </details>
-
-          <details open>
-            <summary>Lower Motif · Reflection</summary>
-            <div className="section-body">
-              <LayerToggle title="Lower Motif" checked={selectedStyle.lowerMotif.enabled} onChange={(v) => updateStyleSection('lowerMotif', 'enabled', v)}>
-                <SelectField label="Motif" value={selectedStyle.lowerMotif.type} options={MOTIF_TYPES} onChange={(v) => updateStyleSection('lowerMotif', 'type', v)} />
-                <ColorField label="Color" value={selectedStyle.lowerMotif.color} onChange={(v) => updateStyleSection('lowerMotif', 'color', v)} />
-                <RangeField label="Count" value={selectedStyle.lowerMotif.count} min={1} max={20} step={1} onChange={(v) => updateStyleSection('lowerMotif', 'count', Math.round(v))} />
-                <RangeField label="Size" value={selectedStyle.lowerMotif.size} min={0.03} max={0.18} step={0.005} onChange={(v) => updateStyleSection('lowerMotif', 'size', v)} />
-                <RangeField label="Spread" value={selectedStyle.lowerMotif.spread} min={0.2} max={0.9} step={0.01} onChange={(v) => updateStyleSection('lowerMotif', 'spread', v)} />
-                <RangeField label="Y Position" value={selectedStyle.lowerMotif.y} min={0.5} max={0.9} step={0.01} onChange={(v) => updateStyleSection('lowerMotif', 'y', v)} />
-                <RangeField label="Opacity" value={selectedStyle.lowerMotif.opacity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('lowerMotif', 'opacity', v)} />
-                <RangeField label="Glow" value={selectedStyle.lowerMotif.glow} min={0} max={0.5} step={0.01} onChange={(v) => updateStyleSection('lowerMotif', 'glow', v)} />
-              </LayerToggle>
-              <LayerToggle title="Reflection" checked={selectedStyle.reflection.enabled} onChange={(v) => updateStyleSection('reflection', 'enabled', v)}>
-                <SelectField label="Type" value={selectedStyle.reflection.type} options={REFLECTION_TYPES} onChange={(v) => updateStyleSection('reflection', 'type', v)} />
-                <ColorField label="Color" value={selectedStyle.reflection.color} onChange={(v) => updateStyleSection('reflection', 'color', v)} />
-                <RangeField label="Opacity" value={selectedStyle.reflection.opacity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('reflection', 'opacity', v)} />
-                <RangeField label="X" value={selectedStyle.reflection.x} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('reflection', 'x', v)} />
-                <RangeField label="Y" value={selectedStyle.reflection.y} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('reflection', 'y', v)} />
-                <RangeField label="Scale X" value={selectedStyle.reflection.scaleX} min={0.05} max={1} step={0.01} onChange={(v) => updateStyleSection('reflection', 'scaleX', v)} />
-                <RangeField label="Scale Y" value={selectedStyle.reflection.scaleY} min={0.05} max={1} step={0.01} onChange={(v) => updateStyleSection('reflection', 'scaleY', v)} />
-              </LayerToggle>
-            </div>
-          </details>
-
-          <details open>
-            <summary>Highlight Group</summary>
-            <div className="section-body">
-              <LayerToggle title="Highlights" checked={selectedStyle.highlight.enabled} onChange={(v) => updateStyleSection('highlight', 'enabled', v)}>
-                <SelectField label="Preset" value={selectedStyle.highlight.preset} options={HIGHLIGHT_TYPES} onChange={(v) => updateStyleSection('highlight', 'preset', v)} />
-                <ColorField label="Color" value={selectedStyle.highlight.color} onChange={(v) => updateStyleSection('highlight', 'color', v)} />
-                <RangeField label="Opacity" value={selectedStyle.highlight.opacity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('highlight', 'opacity', v)} />
-                <RangeField label="Size" value={selectedStyle.highlight.size} min={0.35} max={2} step={0.01} onChange={(v) => updateStyleSection('highlight', 'size', v)} />
-                <RangeField label="X" value={selectedStyle.highlight.x} min={0.05} max={0.95} step={0.01} onChange={(v) => updateStyleSection('highlight', 'x', v)} />
-                <RangeField label="Y" value={selectedStyle.highlight.y} min={0.05} max={0.95} step={0.01} onChange={(v) => updateStyleSection('highlight', 'y', v)} />
-                <RangeField label="Glow" value={selectedStyle.highlight.glow} min={0} max={0.55} step={0.01} onChange={(v) => updateStyleSection('highlight', 'glow', v)} />
-              </LayerToggle>
-            </div>
-          </details>
+          <div className="property-title"><span>{CATEGORY_LABELS[category]}</span><small>프리셋은 다시 누르면 해제됩니다.</small></div>
+          <CategoryPanel
+            category={category}
+            project={project}
+            updateDesign={updateDesign}
+            clearSection={clearSection}
+            togglePreset={togglePreset}
+            overlayInputRef={overlayInputRef}
+            updateMaskFeather={updateMaskFeather}
+          />
         </aside>
       </div>
     </div>
   )
 }
 
-function PresetGroup({ title, items, onApply }: { title: string; items: Record<string, any>; onApply: (name: string, patch: any) => void }) {
+function CategoryPanel({ category, project, updateDesign, clearSection, togglePreset, overlayInputRef, updateMaskFeather }: any) {
+  const d = project.design as EyeDesignV5
+  if (category === 'mask') {
+    return <section><h3>마스크 설정</h3><RangeField label="경계 부드러움" value={project.masks.left.feather} min={0} max={20} step={0.5} onChange={updateMaskFeather} /><div className="hint">다각형 점 편집: 점 드래그 / Shift+선 클릭=점 추가 / Alt+점 클릭=점 삭제</div></section>
+  }
+
+  if (category === 'background') return (
+    <>
+      <PresetGrid title="배경 프리셋" section="background" active={d.background.presetId} presets={BACKGROUND_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <SectionCard title="배경 세부 조절">
+        <OpacityField value={d.background.opacity} onChange={(v) => updateDesign('background', { opacity: v })} />
+        <ColorField label="상단 색" value={d.background.topColor} onChange={(v) => updateDesign('background', { topColor: v })} />
+        <ColorField label="중앙 색" value={d.background.midColor} onChange={(v) => updateDesign('background', { midColor: v })} />
+        <ColorField label="하단 색" value={d.background.bottomColor} onChange={(v) => updateDesign('background', { bottomColor: v })} />
+        <RangeField label="대비" value={d.background.contrast} min={0.6} max={1.5} step={0.01} onChange={(v) => updateDesign('background', { contrast: v })} />
+      </SectionCard>
+    </>
+  )
+
+  if (category === 'ring') return (
+    <>
+      <PresetGrid title="윤곽 링" section="ring" active={d.ring.presetId} presets={RING_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <SectionCard title="링 세부 조절"><OpacityField value={d.ring.opacity} onChange={(v) => updateDesign('ring', { opacity: v })} /><ColorField label="색상" value={d.ring.color} onChange={(v) => updateDesign('ring', { color: v })} /><RangeField label="두께" value={d.ring.thickness} min={0.01} max={0.18} step={0.005} onChange={(v) => updateDesign('ring', { thickness: v })} /></SectionCard>
+    </>
+  )
+
+  if (category === 'pupil') return (
+    <>
+      <PresetGrid title="동공 모양" section="pupil" active={d.pupil.presetId} presets={PUPIL_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <SectionCard title="동공 위치와 크기">
+        <RangeField label="위치 X" value={d.pupil.x} min={0.15} max={0.85} step={0.005} onChange={(v) => updateDesign('pupil', { x: v })} />
+        <RangeField label="위치 Y" value={d.pupil.y} min={0.15} max={0.85} step={0.005} onChange={(v) => updateDesign('pupil', { y: v })} />
+        <RangeField label="가로 크기" value={d.pupil.scaleX} min={0.04} max={0.65} step={0.005} onChange={(v) => updateDesign('pupil', { scaleX: v })} />
+        <RangeField label="세로 크기" value={d.pupil.scaleY} min={0.04} max={0.7} step={0.005} onChange={(v) => updateDesign('pupil', { scaleY: v })} />
+        <RangeField label="회전" value={d.pupil.rotation} min={-3.14} max={3.14} step={0.01} onChange={(v) => updateDesign('pupil', { rotation: v })} />
+        <OpacityField value={d.pupil.opacity} onChange={(v) => updateDesign('pupil', { opacity: v })} />
+      </SectionCard>
+      <SectionCard title="동공 내부 그라데이션">
+        <ColorField label="상단" value={d.pupil.topColor} onChange={(v) => updateDesign('pupil', { topColor: v })} />
+        <ColorField label="중앙" value={d.pupil.midColor} onChange={(v) => updateDesign('pupil', { midColor: v })} />
+        <ColorField label="하단" value={d.pupil.bottomColor} onChange={(v) => updateDesign('pupil', { bottomColor: v })} />
+        <ColorField label="외곽" value={d.pupil.edgeColor} onChange={(v) => updateDesign('pupil', { edgeColor: v })} />
+        <RangeField label="그라데이션 깊이" value={d.pupil.gradientStrength} min={0} max={1} step={0.01} onChange={(v) => updateDesign('pupil', { gradientStrength: v })} />
+      </SectionCard>
+    </>
+  )
+
+  if (category === 'lowerPoint') return (
+    <>
+      <PresetGrid title="하단 포인트" section="lowerPoint" active={d.lowerPoint.presetId} presets={LOWER_POINT_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <TransformControls state={d.lowerPoint} update={(patch: any) => updateDesign('lowerPoint', patch)} includeCount />
+      <SectionCard title="표현"><ColorField label="주 색상" value={d.lowerPoint.color} onChange={(v) => updateDesign('lowerPoint', { color: v })} /><ColorField label="보조 색상" value={d.lowerPoint.secondaryColor} onChange={(v) => updateDesign('lowerPoint', { secondaryColor: v })} /><OpacityField value={d.lowerPoint.opacity} onChange={(v) => updateDesign('lowerPoint', { opacity: v })} /><RangeField label="손그림 느낌" value={d.lowerPoint.handDrawnAmount} min={0} max={1} step={0.01} onChange={(v) => updateDesign('lowerPoint', { handDrawnAmount: v })} /></SectionCard>
+    </>
+  )
+
+  if (category === 'upperShadow') return (
+    <>
+      <PresetGrid title="상단 그림자 / 속눈썹 그림자" section="upperShadow" active={d.upperShadow.presetId} presets={UPPER_SHADOW_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <SectionCard title="위치와 표현"><RangeField label="위치 X" value={d.upperShadow.x} min={0} max={1} step={0.005} onChange={(v) => updateDesign('upperShadow', { x: v })} /><RangeField label="위치 Y" value={d.upperShadow.y} min={0} max={0.7} step={0.005} onChange={(v) => updateDesign('upperShadow', { y: v })} /><RangeField label="높이" value={d.upperShadow.scaleY} min={0.1} max={1} step={0.01} onChange={(v) => updateDesign('upperShadow', { scaleY: v })} /><OpacityField value={d.upperShadow.opacity} onChange={(v) => updateDesign('upperShadow', { opacity: v })} /><ColorField label="색상" value={d.upperShadow.color} onChange={(v) => updateDesign('upperShadow', { color: v })} /><RangeField label="블러" value={d.upperShadow.blur} min={0} max={0.2} step={0.005} onChange={(v) => updateDesign('upperShadow', { blur: v })} /></SectionCard>
+    </>
+  )
+
+  if (category === 'reflection') return (
+    <>
+      <PresetGrid title="반사광" section="reflection" active={d.reflection.presetId} presets={REFLECTION_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <TransformControls state={d.reflection} update={(patch: any) => updateDesign('reflection', patch)} />
+      <SectionCard title="반사광 표현"><ColorField label="주 색상" value={d.reflection.color} onChange={(v) => updateDesign('reflection', { color: v })} /><ColorField label="보조 색상" value={d.reflection.secondaryColor} onChange={(v) => updateDesign('reflection', { secondaryColor: v })} /><OpacityField value={d.reflection.opacity} onChange={(v) => updateDesign('reflection', { opacity: v })} /><RangeField label="블러" value={d.reflection.blur} min={0} max={0.2} step={0.005} onChange={(v) => updateDesign('reflection', { blur: v })} /><RangeField label="손그림 느낌" value={d.reflection.handDrawnAmount} min={0} max={1} step={0.01} onChange={(v) => updateDesign('reflection', { handDrawnAmount: v })} /></SectionCard>
+    </>
+  )
+
+  if (category === 'irisTexture') return (
+    <>
+      <PresetGrid title="홍채 결" section="irisTexture" active={d.irisTexture.presetId} presets={IRIS_TEXTURE_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <SectionCard title="결 세부 조절"><OpacityField value={d.irisTexture.opacity} onChange={(v) => updateDesign('irisTexture', { opacity: v })} /><RangeField label="밀도" value={d.irisTexture.density} min={4} max={80} step={1} onChange={(v) => updateDesign('irisTexture', { density: v })} /><RangeField label="길이" value={d.irisTexture.length} min={0.1} max={1} step={0.01} onChange={(v) => updateDesign('irisTexture', { length: v })} /><RangeField label="랜덤도" value={d.irisTexture.randomness} min={0} max={1} step={0.01} onChange={(v) => updateDesign('irisTexture', { randomness: v })} /><ColorField label="주 색상" value={d.irisTexture.color} onChange={(v) => updateDesign('irisTexture', { color: v })} /><ColorField label="보조 색상" value={d.irisTexture.secondaryColor} onChange={(v) => updateDesign('irisTexture', { secondaryColor: v })} /></SectionCard>
+    </>
+  )
+
+  if (category === 'overlayPreset') return (
+    <>
+      <PresetGrid title="내장 문양" section="overlayPreset" active={d.overlayPreset.presetId} presets={OVERLAY_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <TransformControls state={d.overlayPreset} update={(patch: any) => updateDesign('overlayPreset', patch)} />
+      <SectionCard title="문양 표현"><ColorField label="주 색상" value={d.overlayPreset.color} onChange={(v) => updateDesign('overlayPreset', { color: v })} /><ColorField label="보조 색상" value={d.overlayPreset.secondaryColor} onChange={(v) => updateDesign('overlayPreset', { secondaryColor: v })} /><OpacityField value={d.overlayPreset.opacity} onChange={(v) => updateDesign('overlayPreset', { opacity: v })} /></SectionCard>
+    </>
+  )
+
+  if (category === 'handDrawnTexture') return (
+    <>
+      <PresetGrid title="손그림 질감" section="handDrawnTexture" active={d.handDrawnTexture.presetId} presets={HANDDRAWN_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <SectionCard title="질감 조절"><OpacityField value={d.handDrawnTexture.opacity} onChange={(v) => updateDesign('handDrawnTexture', { opacity: v })} /><RangeField label="불균일도" value={d.handDrawnTexture.amount} min={0} max={1} step={0.01} onChange={(v) => updateDesign('handDrawnTexture', { amount: v })} /><RangeField label="결 크기" value={d.handDrawnTexture.grainSize} min={0.005} max={0.08} step={0.001} onChange={(v) => updateDesign('handDrawnTexture', { grainSize: v })} /><ColorField label="색상" value={d.handDrawnTexture.color} onChange={(v) => updateDesign('handDrawnTexture', { color: v })} /></SectionCard>
+    </>
+  )
+
   return (
-    <details open>
-      <summary>{title}</summary>
-      <div className="preset-grid compact-grid">
-        {Object.entries(items).map(([name, patch]) => (
-          <button key={name} onClick={() => onApply(name, patch)}>{name}</button>
-        ))}
-      </div>
-    </details>
+    <>
+      <SectionCard title="외부 문양 이미지">
+        <button className="primary full" onClick={() => overlayInputRef.current?.click()}>문양 이미지 불러오기</button>
+        <div className="hint">PNG 투명 배경을 권장합니다. WEBP/JPG도 불러올 수 있습니다.</div>
+        <button className="full" onClick={() => clearSection('overlayImage')}>이미지 제거</button>
+      </SectionCard>
+      <SectionCard title="이미지 위치 / 투명도">
+        <RangeField label="위치 X" value={d.overlayImage.x} min={0} max={1} step={0.005} onChange={(v) => updateDesign('overlayImage', { x: v })} />
+        <RangeField label="위치 Y" value={d.overlayImage.y} min={0} max={1} step={0.005} onChange={(v) => updateDesign('overlayImage', { y: v })} />
+        <RangeField label="크기" value={d.overlayImage.scale} min={0.05} max={2} step={0.01} onChange={(v) => updateDesign('overlayImage', { scale: v })} />
+        <RangeField label="회전" value={d.overlayImage.rotation} min={-3.14} max={3.14} step={0.01} onChange={(v) => updateDesign('overlayImage', { rotation: v })} />
+        <OpacityField value={d.overlayImage.opacity} onChange={(v) => updateDesign('overlayImage', { opacity: v })} />
+        <SelectField label="혼합 모드" value={d.overlayImage.blendMode} options={{ 'source-over': '일반', screen: '스크린', overlay: '오버레이', multiply: '곱하기', 'soft-light': '소프트 라이트' }} onChange={(v) => updateDesign('overlayImage', { blendMode: v })} />
+      </SectionCard>
+    </>
   )
 }
 
-function toolHelp(tool: ToolMode) {
-  switch (tool) {
-    case 'pan': return 'Pan: drag the canvas view without changing UV coordinates.'
-    case 'ellipse': return 'Draw Ellipse: drag directly over the iris UV area to replace the selected eye mask.'
-    case 'polygon': return 'Polygon: click freely around the true iris boundary. Click the first point or Complete to close it.'
-    case 'editPoints': return 'Edit Points: drag a polygon vertex. Shift+click edge adds; Alt+click vertex deletes.'
-    case 'moveMask': return 'Move Mask: drag anywhere inside the selected mask to move the whole mask.'
-  }
+function PresetGrid({ title, section, active, presets, clearSection, togglePreset }: any) {
+  return (
+    <section><h3>{title}</h3><div className="preset-grid"><button className={!active ? 'off active' : 'off'} onClick={() => clearSection(section)}>끄기</button>{Object.keys(presets).map((name) => <button key={name} className={active === name ? 'active' : ''} onClick={() => togglePreset(section, name, presets[name])}>{name}</button>)}</div></section>
+  )
 }
 
-function maskToScreen(mask: EyeMask, canvas: { width: number; height: number }, image: { width: number; height: number }, view: ViewState): EyeMask {
-  const origin = imageToScreen(0, 0, canvas, image, view)
-  if (mask.type === 'ellipse') {
-    const center = imageToScreen(mask.cx, mask.cy, canvas, image, view)
-    return { ...mask, cx: center.x, cy: center.y, rx: mask.rx * origin.scale, ry: mask.ry * origin.scale, feather: mask.feather * origin.scale }
-  }
-  return {
-    ...mask,
-    feather: mask.feather * origin.scale,
-    points: mask.points.map((point) => imagePointToScreen(point, canvas, image, view)),
-  }
+function TransformControls({ state, update, includeCount = false }: any) {
+  return <SectionCard title="위치 / 크기"><RangeField label="위치 X" value={state.x ?? 0.5} min={0} max={1} step={0.005} onChange={(v) => update({ x: v })} /><RangeField label="위치 Y" value={state.y ?? 0.5} min={0} max={1} step={0.005} onChange={(v) => update({ y: v })} />{state.scale !== undefined ? <RangeField label="전체 크기" value={state.scale} min={0.2} max={2} step={0.01} onChange={(v) => update({ scale: v })} /> : <><RangeField label="가로 크기" value={state.scaleX} min={0.1} max={1.8} step={0.01} onChange={(v) => update({ scaleX: v })} /><RangeField label="세로 크기" value={state.scaleY} min={0.1} max={1.8} step={0.01} onChange={(v) => update({ scaleY: v })} /></>}<RangeField label="회전" value={state.rotation ?? 0} min={-3.14} max={3.14} step={0.01} onChange={(v) => update({ rotation: v })} />{includeCount && <><RangeField label="개수" value={state.count} min={1} max={30} step={1} onChange={(v) => update({ count: v })} /><RangeField label="퍼짐" value={state.spread} min={0.1} max={1.2} step={0.01} onChange={(v) => update({ spread: v })} /><RangeField label="요소 크기" value={state.size} min={0.01} max={0.2} step={0.002} onChange={(v) => update({ size: v })} /></>}</SectionCard>
 }
 
-function imagePointToScreen(point: Point, canvas: { width: number; height: number }, image: { width: number; height: number }, view: ViewState) {
-  const converted = imageToScreen(point.x, point.y, canvas, image, view)
-  return { x: converted.x, y: converted.y }
+function SectionCard({ title, children }: { title: string; children: ReactNode }) {
+  return <section className="section-card"><h3>{title}</h3><div className="field-grid">{children}</div></section>
 }
 
-function drawMaskOverlay(ctx: CanvasRenderingContext2D, mask: EyeMask, selected: boolean, color: string, selectedPoint: number | null) {
-  ctx.save()
-  ctx.strokeStyle = selected ? color : 'rgba(255,255,255,0.58)'
-  ctx.lineWidth = selected ? 2.2 : 1.2
-  ctx.setLineDash(selected ? [8, 5] : [5, 5])
-  ctx.beginPath()
-  if (mask.type === 'ellipse') {
-    ctx.ellipse(mask.cx, mask.cy, mask.rx, mask.ry, mask.rotation, 0, Math.PI * 2)
-  } else if (mask.points.length >= 2) {
-    ctx.moveTo(mask.points[0].x, mask.points[0].y)
-    mask.points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y))
-    ctx.closePath()
-  }
-  ctx.stroke()
-  ctx.setLineDash([])
-
-  if (mask.type === 'ellipse') {
-    ctx.strokeStyle = selected ? color : 'rgba(255,255,255,0.6)'
-    ctx.beginPath(); ctx.moveTo(mask.cx - 9, mask.cy); ctx.lineTo(mask.cx + 9, mask.cy); ctx.moveTo(mask.cx, mask.cy - 9); ctx.lineTo(mask.cx, mask.cy + 9); ctx.stroke()
-  } else if (selected) {
-    mask.points.forEach((point, index) => {
-      ctx.fillStyle = selectedPoint === index ? '#ffffff' : color
-      ctx.strokeStyle = '#10131b'
-      ctx.lineWidth = 1.5
-      ctx.beginPath(); ctx.arc(point.x, point.y, selectedPoint === index ? 6 : 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke()
-    })
-  }
-  ctx.restore()
+function RangeField({ label, value, min, max, step, onChange }: any) {
+  const numberValue = Number(value)
+  return <label className="field"><div className="field-head"><span>{label}</span><input className="mini-number" type="number" value={Number.isFinite(numberValue) ? Number(numberValue.toFixed(3)) : 0} min={min} max={max} step={step} onChange={(e) => onChange(Number(e.target.value))} /></div><input type="range" value={numberValue} min={min} max={max} step={step} onChange={(e) => onChange(Number(e.target.value))} /></label>
 }
 
-function drawDraftPolygon(ctx: CanvasRenderingContext2D, points: Point[], color: string) {
-  if (points.length === 0) return
-  ctx.save()
-  ctx.strokeStyle = color
-  ctx.fillStyle = color
-  ctx.lineWidth = 2
-  ctx.setLineDash([6, 5])
-  ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y)); ctx.stroke(); ctx.setLineDash([])
-  points.forEach((point, index) => {
-    ctx.beginPath(); ctx.arc(point.x, point.y, index === 0 ? 6 : 4, 0, Math.PI * 2); ctx.fill()
-  })
-  ctx.restore()
+function OpacityField({ value, onChange }: any) {
+  return <RangeField label="불투명도" value={value} min={0} max={1} step={0.01} onChange={onChange} />
+}
+
+function ColorField({ label, value, onChange }: any) {
+  return <label className="field"><span>{label}</span><div className="color-input-row"><input type="color" value={value} onChange={(e) => onChange(e.target.value)} /><input type="text" value={value} onChange={(e) => onChange(e.target.value)} /></div></label>
+}
+
+function SelectField({ label, value, options, onChange }: any) {
+  return <label className="field"><span>{label}</span><select value={value} onChange={(e) => onChange(e.target.value)}>{Object.entries(options).map(([key, name]) => <option key={key} value={key}>{String(name)}</option>)}</select></label>
 }
 
 function drawChecker(ctx: CanvasRenderingContext2D, width: number, height: number) {
   const size = 18
-  for (let y = 0; y < height; y += size) {
-    for (let x = 0; x < width; x += size) {
-      ctx.fillStyle = (Math.floor(x / size) + Math.floor(y / size)) % 2 === 0 ? '#202637' : '#252d41'
-      ctx.fillRect(x, y, size, size)
-    }
-  }
+  for (let y = 0; y < height; y += size) for (let x = 0; x < width; x += size) { ctx.fillStyle = (Math.floor(x / size) + Math.floor(y / size)) % 2 === 0 ? '#202635' : '#252d3e'; ctx.fillRect(x, y, size, size) }
 }
 
 function drawEmptyState(ctx: CanvasRenderingContext2D, width: number, height: number) {
-  ctx.fillStyle = 'rgba(255,255,255,0.92)'
-  ctx.font = '700 24px sans-serif'
-  ctx.textAlign = 'center'
-  ctx.fillText('UV Eye Texture Studio v0.4', width / 2, height / 2 - 28)
-  ctx.fillStyle = 'rgba(255,255,255,0.58)'
-  ctx.font = '15px sans-serif'
-  ctx.fillText('Open a PNG, auto detect the eye UVs from transparency, then build the iris from detailed element presets.', width / 2, height / 2 + 7)
-  ctx.fillText('Your UV image is processed locally in the browser.', width / 2, height / 2 + 33)
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.font = '700 23px sans-serif'; ctx.fillText('UV 텍스처를 열어주세요', width / 2, height / 2 - 12); ctx.fillStyle = 'rgba(255,255,255,0.56)'; ctx.font = '14px sans-serif'; ctx.fillText('PNG를 열면 투명하지 않은 눈 영역을 먼저 자동 인식합니다.', width / 2, height / 2 + 20)
 }
 
-function NumberField({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void }) {
-  return <label className="field"><span>{label}</span><input type="number" value={Number.isFinite(value) ? value : 0} min={min} max={max} step={step} onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(Number(e.target.value))} /></label>
+function imagePointToScreen(point: Point, canvas: { width: number; height: number }, image: { width: number; height: number }, view: ViewState) {
+  const t = imageToScreen(point.x, point.y, canvas, image, view)
+  return { x: t.x, y: t.y }
 }
 
-function RangeField({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void }) {
-  return <label className="field"><div className="field-head"><span>{label}</span><strong>{Number(value).toFixed(step >= 1 ? 0 : step >= 0.01 ? 2 : 3)}</strong></div><input type="range" value={value} min={min} max={max} step={step} onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(Number(e.target.value))} /></label>
+function maskToScreen(mask: EyeMask, canvas: { width: number; height: number }, image: { width: number; height: number }, view: ViewState): EyeMask {
+  const base = imageToScreen(0, 0, canvas, image, view)
+  if (mask.type === 'ellipse') {
+    const center = imageToScreen(mask.cx, mask.cy, canvas, image, view)
+    return { ...mask, cx: center.x, cy: center.y, rx: mask.rx * base.scale, ry: mask.ry * base.scale, feather: mask.feather * base.scale }
+  }
+  return { ...mask, points: mask.points.map((p) => imagePointToScreen(p, canvas, image, view)), feather: mask.feather * base.scale }
 }
 
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <label className="field color-field"><span>{label}</span><div className="color-input-row"><input type="color" value={value} onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)} /><input type="text" value={value} onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)} /></div></label>
+function drawMaskOverlay(ctx: CanvasRenderingContext2D, mask: EyeMask, color: string, selectedPoint: number | null) {
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash([7, 5]); ctx.beginPath()
+  if (mask.type === 'ellipse') { ctx.save(); ctx.translate(mask.cx, mask.cy); ctx.rotate(mask.rotation); ctx.ellipse(0, 0, mask.rx, mask.ry, 0, 0, Math.PI * 2); ctx.restore() } else if (mask.points.length) { ctx.moveTo(mask.points[0].x, mask.points[0].y); for (let i = 1; i < mask.points.length; i += 1) ctx.lineTo(mask.points[i].x, mask.points[i].y); ctx.closePath() }
+  ctx.stroke(); ctx.setLineDash([])
+  if (mask.type === 'polygon') mask.points.forEach((p, index) => { ctx.fillStyle = index === selectedPoint ? '#ffe38a' : color; ctx.beginPath(); ctx.arc(p.x, p.y, index === selectedPoint ? 5.5 : 4, 0, Math.PI * 2); ctx.fill() })
+  ctx.restore()
 }
 
-function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
-  return <label className="field"><span>{label}</span><select value={value} onChange={(e: ChangeEvent<HTMLSelectElement>) => onChange(e.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>
-}
-
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
-  return <label className="toggle"><input type="checkbox" checked={checked} onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.checked)} /><span>{label}</span></label>
-}
-
-function LayerToggle({ title, checked, onChange, children }: { title: string; checked: boolean; onChange: (value: boolean) => void; children: ReactNode }) {
-  return <div className={`layer-card ${checked ? '' : 'disabled-layer'}`}><div className="layer-head"><Toggle label={title} checked={checked} onChange={onChange} /></div><div className="layer-fields">{children}</div></div>
+function drawDraftPolygon(ctx: CanvasRenderingContext2D, points: Point[]) {
+  if (!points.length) return
+  ctx.save(); ctx.strokeStyle = '#9bc0ff'; ctx.fillStyle = '#9bc0ff'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y); ctx.stroke(); ctx.setLineDash([]); points.forEach((p) => { ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill() }); ctx.restore()
 }

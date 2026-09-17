@@ -1,6 +1,6 @@
 import { getMaskBounds, traceMaskPath, translateMask } from './mask'
 import { mulberry32 } from './random'
-import type { EyeDesignV5, EyeMask, OverlayImageState, PupilShape } from './types'
+import type { EyeDesignV6, EyeMask, OverlayImageState, PupilShape } from './types'
 
 function hexToRgba(hex: string, alpha: number) {
   const normalized = hex.replace('#', '')
@@ -57,6 +57,18 @@ function shapePath(ctx: CanvasRenderingContext2D, shape: PupilShape, cx: number,
     ctx.quadraticCurveTo(0, -ry, rx, 0)
     ctx.quadraticCurveTo(0, ry, -rx, 0)
     ctx.closePath()
+  } else if (shape === 'capsule') {
+    const r = Math.min(rx, ry)
+    ctx.roundRect(-rx, -ry, rx * 2, ry * 2, r)
+  } else if (shape === 'flowerCore') {
+    const petals = 5
+    for (let i = 0; i < petals; i += 1) {
+      const a = (i / petals) * Math.PI * 2 - Math.PI / 2
+      const px = Math.cos(a) * rx * 0.36
+      const py = Math.sin(a) * ry * 0.36
+      ctx.moveTo(px + rx * 0.38, py)
+      ctx.ellipse(px, py, rx * 0.42, ry * 0.42, a, 0, Math.PI * 2)
+    }
   } else {
     // core
     ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2)
@@ -69,15 +81,11 @@ function fillPupilShape(ctx: CanvasRenderingContext2D, shape: PupilShape, cx: nu
   ctx.fill()
 }
 
-function strokePupilShape(ctx: CanvasRenderingContext2D, shape: PupilShape, cx: number, cy: number, rx: number, ry: number, rotation: number) {
-  shapePath(ctx, shape, cx, cy, rx, ry, rotation)
-  ctx.stroke()
-}
 
 export function compositeEyeDesign(
   target: CanvasRenderingContext2D,
   mask: EyeMask,
-  design: EyeDesignV5,
+  design: EyeDesignV6,
   width: number,
   height: number,
   mirrorX = false,
@@ -124,7 +132,7 @@ export function compositeEyeDesign(
 export function renderEyeCore(
   ctx: CanvasRenderingContext2D,
   mask: EyeMask,
-  design: EyeDesignV5,
+  design: EyeDesignV6,
   mirrorX = false,
   overlayImage: HTMLImageElement | null = null,
 ) {
@@ -141,6 +149,7 @@ export function renderEyeCore(
   if (design.irisTexture.enabled) drawIrisTexture(ctx, bounds, design, mirrorX)
   if (design.upperShadow.enabled) drawUpperShadow(ctx, bounds, design, mirrorX)
   if (design.reflection.enabled) drawReflection(ctx, bounds, design, mirrorX)
+  if (design.symbol.enabled) drawSymbol(ctx, bounds, design, mirrorX)
   if (design.overlayPreset.enabled) drawOverlayPreset(ctx, bounds, design, mirrorX)
   if (design.lowerPoint.enabled) drawLowerPoints(ctx, bounds, design, mirrorX)
   if (design.handDrawnTexture.enabled) drawHandDrawnTexture(ctx, bounds, design)
@@ -162,7 +171,7 @@ export function renderEyeCore(
   ctx.restore()
 }
 
-function drawBackground(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV5) {
+function drawBackground(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV6) {
   const bg = design.background
   ctx.save()
   ctx.globalAlpha = bg.opacity
@@ -187,7 +196,7 @@ function drawBackground(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof
   ctx.restore()
 }
 
-function drawPupil(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV5, mirrorX: boolean) {
+function drawPupil(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV6, mirrorX: boolean) {
   const p = design.pupil
   const x = bounds.minX + bounds.width * mappedX(p.x, mirrorX)
   const y = bounds.minY + bounds.height * p.y
@@ -210,12 +219,6 @@ function drawPupil(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getM
   ctx.fillStyle = grad
   fillPupilShape(ctx, p.shape, x, y, prx, pry, rotation)
 
-  if (p.edgeOpacity > 0) {
-    ctx.filter = 'none'
-    ctx.strokeStyle = hexToRgba(p.edgeColor, p.edgeOpacity)
-    ctx.lineWidth = Math.max(1, Math.min(prx, pry) * (0.08 + p.softness * 0.12))
-    strokePupilShape(ctx, p.shape, x, y, prx, pry, rotation)
-  }
 
   if (p.gradientStrength > 0) {
     const depth = ctx.createRadialGradient(x, y + pry * 0.16, 0, x, y, Math.max(prx, pry))
@@ -227,7 +230,7 @@ function drawPupil(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getM
   }
 
   if (p.shape === 'core') {
-    ctx.fillStyle = hexToRgba(p.edgeColor, Math.min(1, p.edgeOpacity + 0.1))
+    ctx.fillStyle = hexToRgba(p.topColor, Math.min(1, 0.75))
     ellipsePath(ctx, x, y, prx * 0.42, pry * 0.46)
     ctx.fill()
     const inner = ctx.createLinearGradient(x, y - pry * 0.3, x, y + pry * 0.3)
@@ -240,283 +243,198 @@ function drawPupil(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getM
   ctx.restore()
 }
 
-function drawUpperShadow(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV5, mirrorX: boolean) {
+function drawUpperShadow(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV6, mirrorX: boolean) {
   const s = design.upperShadow
   const basis = Math.min(bounds.width, bounds.height)
   const centerX = bounds.minX + bounds.width * mappedX(s.x, mirrorX)
   const centerY = bounds.minY + bounds.height * s.y
+  const w = bounds.width * s.scaleX
+  const h = bounds.height * s.scaleY
   ctx.save()
   ctx.translate(centerX, centerY)
   ctx.rotate(mirrorX ? -s.rotation : s.rotation)
   ctx.globalAlpha = s.opacity
   if (s.blur > 0) ctx.filter = `blur(${s.blur * basis}px)`
 
-  if (s.type === 'lashShadow' || s.type === 'splitLash' || s.type === 'handdrawnShadow') {
+  const isLash = ['lashShadow','splitLash','handdrawnShadow','shortLash','longLash'].includes(s.type)
+  if (isLash) {
     const count = Math.max(3, Math.round(s.lashCount))
     ctx.strokeStyle = s.color
     ctx.lineCap = 'round'
+    const lenMul = s.type === 'shortLash' ? 0.65 : s.type === 'longLash' ? 1.38 : 1
     for (let i = 0; i < count; i += 1) {
       const t = count === 1 ? 0.5 : i / (count - 1)
       const offset = (t - 0.5) * bounds.width * s.lashSpread
-      const seedWobble = Math.sin(i * 2.41 + s.handDrawnAmount * 3.7) * basis * 0.015 * s.handDrawnAmount
-      const len = basis * s.lashLength * (0.75 + 0.35 * Math.sin(i * 1.7 + 1.2))
-      ctx.lineWidth = Math.max(1, basis * (s.type === 'handdrawnShadow' ? 0.022 : 0.017))
+      const wave = Math.sin(i * 2.17 + 0.8) * basis * 0.018 * (0.4 + s.handDrawnAmount)
+      const len = basis * s.lashLength * lenMul * (0.72 + 0.32 * Math.sin(i * 1.53 + 1.1))
+      ctx.lineWidth = Math.max(0.8, basis * (s.type === 'handdrawnShadow' ? 0.02 : 0.014) * (0.85 + (i % 3) * 0.08))
+      ctx.globalAlpha = s.opacity * (0.62 + 0.26 * Math.sin(i * 1.7 + 1.4))
       ctx.beginPath()
-      ctx.moveTo(offset, -basis * 0.03)
-      ctx.quadraticCurveTo(offset + seedWobble, len * 0.4, offset + (t - 0.5) * basis * 0.07, len)
+      ctx.moveTo(offset, -basis * 0.035)
+      ctx.quadraticCurveTo(offset + wave, len * 0.28, offset + (t - 0.5) * basis * 0.085, len)
       ctx.stroke()
       if (s.type === 'splitLash' && i % 2 === 0) {
-        ctx.beginPath()
-        ctx.moveTo(offset, basis * 0.03)
-        ctx.lineTo(offset - basis * 0.05, len * 0.78)
-        ctx.stroke()
+        ctx.beginPath(); ctx.moveTo(offset, basis * 0.015); ctx.lineTo(offset - basis * 0.045, len * 0.72); ctx.stroke()
       }
     }
+    ctx.globalAlpha = s.opacity
   }
 
-  const h = bounds.height * s.scaleY
-  const w = bounds.width * s.scaleX
-  const grad = ctx.createLinearGradient(0, -h * 0.55, 0, h * 0.55)
-  const peak = s.type === 'deepShadow' || s.type === 'animeTop' ? s.intensity : s.intensity * 0.76
+  const grad = ctx.createLinearGradient(0, -h * 0.62, 0, h * 0.62)
+  const peak = ['deepShadow','animeTop','centerShadow','wingShadow'].includes(s.type) ? s.intensity : s.intensity * 0.72
   grad.addColorStop(0, hexToRgba(s.color, peak))
-  grad.addColorStop(0.48, hexToRgba(s.color, peak * 0.55))
+  grad.addColorStop(0.45, hexToRgba(s.color, peak * 0.48))
   grad.addColorStop(1, hexToRgba(s.color, 0))
   ctx.fillStyle = grad
-  if (s.type === 'animeTop') {
-    ctx.beginPath()
-    ctx.moveTo(-w * 0.5, -h * 0.4)
-    ctx.quadraticCurveTo(0, h * 0.05, w * 0.5, -h * 0.4)
-    ctx.lineTo(w * 0.5, -h)
-    ctx.lineTo(-w * 0.5, -h)
-    ctx.closePath()
-    ctx.fill()
-  } else if (s.type === 'jellyDark') {
-    ellipsePath(ctx, 0, 0, w * 0.52, h * 0.7)
-    ctx.fill()
+
+  if (s.type === 'animeTop' || s.type === 'thinAnime') {
+    const thin = s.type === 'thinAnime' ? 0.38 : 0.75
+    ctx.beginPath(); ctx.moveTo(-w * 0.52, -h * 0.32); ctx.quadraticCurveTo(0, h * 0.06 * thin, w * 0.52, -h * 0.32); ctx.lineTo(w * 0.52, -h); ctx.lineTo(-w * 0.52, -h); ctx.closePath(); ctx.fill()
+  } else if (s.type === 'jellyDark' || s.type === 'roundLid') {
+    ellipsePath(ctx, 0, s.type === 'roundLid' ? -h * 0.1 : 0, w * 0.52, h * (s.type === 'roundLid' ? 0.58 : 0.72)); ctx.fill()
+  } else if (s.type === 'centerShadow') {
+    const g = ctx.createRadialGradient(0, -h * 0.05, 0, 0, -h * 0.05, w * 0.48)
+    g.addColorStop(0, hexToRgba(s.color, peak)); g.addColorStop(1, hexToRgba(s.color, 0)); ctx.fillStyle = g; ctx.fillRect(-w/2,-h,w,h*1.4)
+  } else if (s.type === 'wingShadow') {
+    ctx.beginPath(); ctx.moveTo(-w * 0.55, -h * 0.25); ctx.quadraticCurveTo(-w * 0.2, h * 0.18, 0, h * 0.05); ctx.quadraticCurveTo(w * 0.2, h * 0.18, w * 0.55, -h * 0.25); ctx.lineTo(w * 0.55,-h); ctx.lineTo(-w*0.55,-h); ctx.closePath(); ctx.fill()
   } else {
-    ctx.fillRect(-w * 0.5, -h * 0.65, w, h)
+    ctx.fillRect(-w * 0.5, -h * 0.68, w, h)
   }
   ctx.restore()
 }
 
-function drawReflection(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV5, mirrorX: boolean) {
+function drawReflection(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV6, mirrorX: boolean) {
   const r = design.reflection
+  const rand = mulberry32(r.seed)
   const basis = Math.min(bounds.width, bounds.height)
   const x = bounds.minX + bounds.width * mappedX(r.x, mirrorX)
   const y = bounds.minY + bounds.height * r.y
   const rx = bounds.width * r.scaleX * 0.5
   const ry = bounds.height * r.scaleY * 0.5
-  ctx.save()
-  ctx.translate(x, y)
-  ctx.rotate(mirrorX ? -r.rotation : r.rotation)
-  ctx.globalAlpha = r.opacity
+  ctx.save(); ctx.translate(x, y); ctx.rotate(mirrorX ? -r.rotation : r.rotation); ctx.globalAlpha = r.opacity
   if (r.blur > 0) ctx.filter = `blur(${r.blur * basis}px)`
-  if (r.bloom > 0) {
-    ctx.shadowColor = r.color
-    ctx.shadowBlur = basis * r.bloom
-  }
+  if (r.bloom > 0) { ctx.shadowColor = r.color; ctx.shadowBlur = basis * r.bloom }
 
-  const radial = (strength = 0.9) => {
-    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.max(rx, ry))
-    g.addColorStop(0, hexToRgba(r.color, strength))
-    g.addColorStop(0.52, hexToRgba(r.secondaryColor, strength * 0.38))
-    g.addColorStop(1, hexToRgba(r.color, 0))
-    ctx.fillStyle = g
-    ellipsePath(ctx, 0, 0, rx, ry)
-    ctx.fill()
+  const radial = (strength = 0.75, cx=0, cy=0, sx=1, sy=1) => {
+    ctx.save(); ctx.scale(sx,sy)
+    const maxR=Math.max(rx,ry); const g=ctx.createRadialGradient(cx,cy,0,cx,cy,maxR)
+    g.addColorStop(0,hexToRgba(r.color,strength)); g.addColorStop(0.48,hexToRgba(r.secondaryColor,strength*0.34)); g.addColorStop(1,hexToRgba(r.color,0))
+    ctx.fillStyle=g; ellipsePath(ctx,cx,cy,rx,ry); ctx.fill(); ctx.restore()
   }
+  const dot = (dx:number,dy:number,size:number,color:string,alpha:number) => { ctx.save(); ctx.globalAlpha=r.opacity*alpha; ctx.fillStyle=color; ellipsePath(ctx,dx,dy,size,size*(0.8+rand()*0.35)); ctx.fill(); ctx.restore() }
+  const star = (dx:number,dy:number,size:number,color:string,alpha:number) => { ctx.save(); ctx.translate(dx,dy); ctx.globalAlpha=r.opacity*alpha; ctx.strokeStyle=color; ctx.lineCap='round'; ctx.lineWidth=Math.max(.7,size*.16); ctx.beginPath(); ctx.moveTo(-size,0); ctx.lineTo(size,0); ctx.moveTo(0,-size); ctx.lineTo(0,size); ctx.moveTo(-size*.55,-size*.55); ctx.lineTo(size*.55,size*.55); ctx.moveTo(size*.55,-size*.55); ctx.lineTo(-size*.55,size*.55); ctx.stroke(); ctx.restore() }
 
-  if (r.type === 'purpleGlow' || r.type === 'blueGlass' || r.type === 'mist') {
-    radial(r.type === 'mist' ? 0.55 : 0.9)
-  } else if (r.type === 'topLens') {
-    const g = ctx.createLinearGradient(0, -ry, 0, ry)
-    g.addColorStop(0, hexToRgba(r.color, 0.72))
-    g.addColorStop(0.52, hexToRgba(r.secondaryColor, 0.26))
-    g.addColorStop(1, hexToRgba(r.color, 0))
-    ctx.fillStyle = g
-    ctx.beginPath()
-    ctx.moveTo(-rx, 0)
-    ctx.quadraticCurveTo(0, -ry * 1.5, rx, 0)
-    ctx.quadraticCurveTo(0, -ry * 0.45, -rx, 0)
-    ctx.fill()
+  if (['purpleGlow','blueGlass','mist','pinkGloss','cyanGloss'].includes(r.type)) {
+    radial(r.type==='mist'?0.45:0.68)
+  } else if (r.type === 'topLens' || r.type === 'film') {
+    const g=ctx.createLinearGradient(0,-ry,0,ry); g.addColorStop(0,hexToRgba(r.color,r.type==='film'?0.42:0.62)); g.addColorStop(.55,hexToRgba(r.secondaryColor,.18)); g.addColorStop(1,hexToRgba(r.color,0)); ctx.fillStyle=g
+    ctx.beginPath(); ctx.moveTo(-rx,0); ctx.quadraticCurveTo(0,-ry*1.5,rx,0); ctx.quadraticCurveTo(0,-ry*.38,-rx,0); ctx.fill()
   } else if (r.type === 'sideThin') {
-    const g = ctx.createLinearGradient(-rx, 0, rx, 0)
-    g.addColorStop(0, hexToRgba(r.color, 0.8))
-    g.addColorStop(0.45, hexToRgba(r.secondaryColor, 0.24))
-    g.addColorStop(1, hexToRgba(r.color, 0))
-    ctx.fillStyle = g
-    ellipsePath(ctx, 0, 0, rx, ry)
-    ctx.fill()
-  } else if (r.type === 'curvedBand' || r.type === 'complex' || r.type === 'handdrawn') {
-    const bands = r.type === 'complex' ? 2 : 1
-    for (let b = 0; b < bands; b += 1) {
-      ctx.strokeStyle = b === 0 ? r.color : r.secondaryColor
-      ctx.lineWidth = Math.max(1, basis * (0.035 + b * 0.018))
-      ctx.lineCap = 'round'
-      ctx.beginPath()
-      const wobble = r.handDrawnAmount * basis * 0.03 * (b + 1)
-      ctx.moveTo(-rx * 0.8, ry * (0.05 + b * 0.2))
-      ctx.bezierCurveTo(-rx * 0.3 + wobble, -ry * 0.85, rx * 0.25 - wobble, -ry * 0.72, rx * 0.8, -ry * 0.12)
-      ctx.stroke()
-    }
-    if (r.type === 'handdrawn') {
-      ctx.globalAlpha *= 0.5
-      for (let i = 0; i < 3; i += 1) {
-        ctx.beginPath()
-        ctx.arc(rx * (0.15 + i * 0.16), ry * (0.1 + i * 0.06), basis * (0.035 + i * 0.008), 0, Math.PI * 2)
-        ctx.stroke()
-      }
-    }
+    const g=ctx.createLinearGradient(-rx,0,rx,0); g.addColorStop(0,hexToRgba(r.color,.72)); g.addColorStop(.42,hexToRgba(r.secondaryColor,.22)); g.addColorStop(1,hexToRgba(r.color,0)); ctx.fillStyle=g; ellipsePath(ctx,0,0,rx,ry); ctx.fill()
+  } else if (['curvedBand','complex','handdrawn','dotBand'].includes(r.type)) {
+    const bands=r.type==='complex'?2:1
+    for(let b=0;b<bands;b++){ ctx.strokeStyle=b? r.secondaryColor:r.color; ctx.lineWidth=Math.max(1,basis*(.022+b*.012)); ctx.lineCap='round'; ctx.globalAlpha=r.opacity*(.68-b*.18); ctx.beginPath(); const wob=(rand()-.5)*basis*.08*r.handDrawnAmount; ctx.moveTo(-rx*.82,ry*(.08+b*.2)); ctx.bezierCurveTo(-rx*.34+wob,-ry*.76,rx*.24-wob,-ry*.68,rx*.82,-ry*.12); ctx.stroke() }
+    if(r.type==='dotBand'){ for(let i=0;i<5;i++) dot((-0.42+i*.2)*rx,ry*(.02+rand()*.24),basis*(.018+rand()*.014),i%2?r.secondaryColor:r.color,.55+rand()*.3) }
+  } else if (r.type === 'doubleReflection') {
+    radial(.52,-rx*.2,-ry*.12,.9,.9); ctx.globalAlpha=r.opacity*.7; radial(.36,rx*.35,ry*.22,.55,.55)
+  } else if (r.type === 'dotCluster') {
+    for(let i=0;i<7;i++) dot((rand()-.5)*rx*1.2,(rand()-.5)*ry*1.1,basis*(.018+rand()*.026),i%2?r.secondaryColor:r.color,.45+rand()*.45)
+  } else if (r.type === 'dropletReflection') {
+    for(let i=0;i<4;i++){ const dx=(rand()-.5)*rx*1.25, dy=(rand()-.5)*ry*.9, size=basis*(.025+rand()*.025); ctx.fillStyle=i%2?r.secondaryColor:r.color; ctx.beginPath(); ctx.moveTo(dx,dy-size*1.3); ctx.bezierCurveTo(dx+size,dy-size*.2,dx+size*.7,dy+size,dx,dy+size); ctx.bezierCurveTo(dx-size*.7,dy+size,dx-size,dy-size*.2,dx,dy-size*1.3); ctx.fill() }
+  } else if (r.type === 'lowerGlowReflection') {
+    const g=ctx.createRadialGradient(0,ry*.25,0,0,ry*.25,Math.max(rx,ry)); g.addColorStop(0,hexToRgba(r.color,.62)); g.addColorStop(.4,hexToRgba(r.secondaryColor,.25)); g.addColorStop(1,hexToRgba(r.color,0)); ctx.fillStyle=g; ellipsePath(ctx,0,ry*.15,rx,ry); ctx.fill()
+  } else if (r.type === 'starSparkle') {
+    star(-rx*.28,-ry*.12,basis*.07,r.color,.82); star(rx*.26,ry*.18,basis*.045,r.secondaryColor,.7); dot(rx*.05,-ry*.35,basis*.018,r.secondaryColor,.6)
+  } else if (r.type === 'cloudTop') {
+    for(let i=0;i<5;i++) radial(.34,(i-2)*rx*.18,(rand()-.5)*ry*.18,.36,.32)
+  } else if (r.type === 'colorPoint') {
+    for(let i=0;i<6;i++) dot((rand()-.5)*rx*1.4,(rand()-.5)*ry*1.2,basis*(.012+rand()*.024),i%2?r.secondaryColor:r.color,.5+rand()*.35)
   }
   ctx.restore()
 }
 
-function drawLowerPoints(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV5, mirrorX: boolean) {
-  const m = design.lowerPoint
-  const rand = mulberry32(m.seed)
-  const basis = Math.min(bounds.width, bounds.height)
-  const centerX = bounds.minX + bounds.width * mappedX(m.x, mirrorX)
-  const baseY = bounds.minY + bounds.height * m.y
-  const count = Math.max(1, Math.round(m.count))
-  ctx.save()
-  ctx.translate(centerX, baseY)
-  ctx.rotate(mirrorX ? -m.rotation : m.rotation)
-  ctx.globalAlpha = m.opacity
-  if (m.blur > 0) ctx.filter = `blur(${m.blur * basis}px)`
-  if (m.glow > 0) {
-    ctx.shadowColor = m.color
-    ctx.shadowBlur = basis * m.glow
+function drawLowerPoints(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV6, mirrorX: boolean) {
+  const m=design.lowerPoint; const rand=mulberry32(m.seed); const basis=Math.min(bounds.width,bounds.height)
+  const centerX=bounds.minX+bounds.width*mappedX(m.x,mirrorX); const baseY=bounds.minY+bounds.height*m.y; const count=Math.max(1,Math.round(m.count))
+  ctx.save(); ctx.translate(centerX,baseY); ctx.rotate(mirrorX?-m.rotation:m.rotation); ctx.globalAlpha=m.opacity
+  if(m.blur>0) ctx.filter=`blur(${m.blur*basis}px)`; if(m.glow>0){ctx.shadowColor=m.color;ctx.shadowBlur=basis*m.glow}
+  const organic=(v:number,amount=.2)=>v*(1+(rand()-.5)*amount*m.handDrawnAmount)
+  const miniStar=(x:number,y:number,s:number,color:string)=>{ctx.save();ctx.translate(x,y);ctx.strokeStyle=color;ctx.lineWidth=Math.max(.7,s*.16);ctx.beginPath();ctx.moveTo(-s,0);ctx.lineTo(s,0);ctx.moveTo(0,-s);ctx.lineTo(0,s);ctx.stroke();ctx.restore()}
+
+  if(m.type==='wave'){
+    ctx.strokeStyle=m.color;ctx.lineWidth=Math.max(1,basis*m.size*.18*m.scale);ctx.lineCap='round';ctx.beginPath()
+    for(let i=0;i<=count*3;i++){const t=i/(count*3),x=(t-.5)*bounds.width*m.spread,y=Math.sin(t*Math.PI*2.6)*basis*m.size*.16+(rand()-.5)*basis*.018*m.handDrawnAmount;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)}ctx.stroke();ctx.restore();return
+  }
+  if(m.type==='warmGlow'){
+    const g=ctx.createRadialGradient(0,0,0,0,0,bounds.width*m.spread*.48);g.addColorStop(0,hexToRgba(m.secondaryColor,.48));g.addColorStop(.42,hexToRgba(m.color,.26));g.addColorStop(1,hexToRgba(m.color,0));ctx.fillStyle=g;ctx.fillRect(-bounds.width*.45,-basis*.22,bounds.width*.9,basis*.5);ctx.restore();return
   }
 
-  if (m.type === 'wave') {
-    ctx.strokeStyle = m.color
-    ctx.lineWidth = Math.max(1, basis * m.size * 0.22 * m.scale)
-    ctx.lineCap = 'round'
-    ctx.beginPath()
-    for (let i = 0; i <= count * 2; i += 1) {
-      const t = i / (count * 2)
-      const x = (t - 0.5) * bounds.width * m.spread
-      const jitter = (rand() - 0.5) * basis * 0.02 * m.handDrawnAmount
-      const y = Math.sin(t * Math.PI * 3.2) * basis * m.size * 0.18 + jitter
-      if (i === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
-    }
-    ctx.stroke()
-    ctx.restore()
-    return
-  }
-
-  for (let i = 0; i < count; i += 1) {
-    const t = count === 1 ? 0.5 : i / (count - 1)
-    const centered = (t - 0.5) * 2
-    const jitterScale = 1 + (rand() - 0.5) * m.sizeJitter
-    const size = basis * m.size * m.scale * jitterScale * (0.78 + (1 - Math.abs(centered)) * 0.25)
-    const x = centered * bounds.width * m.spread * 0.5 + (rand() - 0.5) * basis * 0.035 * m.handDrawnAmount
-    const y = (1 - centered * centered) * basis * 0.07 + (rand() - 0.5) * basis * 0.03 * m.handDrawnAmount
-    const localRotation = centered * 0.45 + (rand() - 0.5) * m.handDrawnAmount * 0.3
-    ctx.save()
-    ctx.translate(x, y)
-    ctx.rotate(localRotation)
-    ctx.fillStyle = i % 3 === 0 ? m.secondaryColor : m.color
-    ctx.strokeStyle = ctx.fillStyle as string
-
-    if (m.type === 'petal') {
-      ctx.beginPath(); ctx.moveTo(0, -size); ctx.quadraticCurveTo(size * 0.68, -size * 0.22, 0, size); ctx.quadraticCurveTo(-size * 0.68, -size * 0.22, 0, -size); ctx.fill()
-    } else if (m.type === 'droplet') {
-      ctx.beginPath(); ctx.moveTo(0, -size); ctx.bezierCurveTo(size * 0.72, -size * 0.1, size * 0.55, size * 0.72, 0, size); ctx.bezierCurveTo(-size * 0.55, size * 0.72, -size * 0.72, -size * 0.1, 0, -size); ctx.fill()
-    } else if (m.type === 'glass') {
-      ctx.beginPath(); ctx.moveTo(-size * 0.58, size * 0.3); ctx.lineTo(-size * 0.08, -size); ctx.lineTo(size * 0.66, -size * 0.12); ctx.lineTo(size * 0.28, size * 0.82); ctx.closePath(); ctx.fill()
-    } else if (m.type === 'reflection') {
-      const g = ctx.createLinearGradient(0, -size, 0, size)
-      g.addColorStop(0, hexToRgba(m.color, 0.7))
-      g.addColorStop(1, hexToRgba(m.secondaryColor, 0.16))
-      ctx.fillStyle = g
-      ellipsePath(ctx, 0, 0, size * 0.28, size)
-      ctx.fill()
-    } else if (m.type === 'ovalCluster') {
-      ellipsePath(ctx, 0, 0, size * 0.42, size * 0.78, localRotation)
-      ctx.fill()
-    } else if (m.type === 'stippling') {
-      ellipsePath(ctx, 0, 0, size * (0.22 + rand() * 0.28), size * (0.22 + rand() * 0.28))
-      ctx.fill()
-    } else if (m.type === 'curve' || m.type === 'handdrawn') {
-      ctx.lineWidth = Math.max(1, size * (m.type === 'handdrawn' ? 0.24 : 0.18))
-      ctx.lineCap = 'round'
-      ctx.beginPath()
-      ctx.moveTo(-size * 0.55, size * 0.1)
-      ctx.quadraticCurveTo(0, -size * (0.55 + rand() * 0.22), size * 0.55, size * 0.08)
-      ctx.stroke()
-    } else {
-      // mixed
-      ellipsePath(ctx, -size * 0.3, 0, size * 0.36, size * 0.36)
-      ctx.fill()
-      ellipsePath(ctx, size * 0.55, size * 0.08, size * 0.18, size * 0.18)
-      ctx.fill()
-      ctx.lineWidth = Math.max(1, size * 0.15)
-      ctx.beginPath(); ctx.moveTo(-size * 0.1, -size * 0.62); ctx.lineTo(size * 0.18, -size * 0.2); ctx.stroke()
-    }
+  for(let i=0;i<count;i++){
+    const t=count===1?.5:i/(count-1), centered=(t-.5)*2, size=basis*m.size*m.scale*(1+(rand()-.5)*m.sizeJitter)*(.72+(1-Math.abs(centered))*.3)
+    const x=centered*bounds.width*m.spread*.5+(rand()-.5)*basis*.04*m.handDrawnAmount, y=(1-centered*centered)*basis*.065+(rand()-.5)*basis*.034*m.handDrawnAmount
+    const rot=centered*.42+(rand()-.5)*m.handDrawnAmount*.45
+    ctx.save();ctx.translate(x,y);ctx.rotate(rot);ctx.globalAlpha=m.opacity*(.76+rand()*.24);ctx.fillStyle=i%3===0?m.secondaryColor:m.color;ctx.strokeStyle=ctx.fillStyle as string
+    if(m.type==='petal'){ctx.beginPath();ctx.moveTo(0,-organic(size));ctx.quadraticCurveTo(organic(size*.66),-size*.2,0,organic(size));ctx.quadraticCurveTo(-organic(size*.66),-size*.2,0,-organic(size));ctx.fill()}
+    else if(m.type==='droplet'){ctx.beginPath();ctx.moveTo(0,-size);ctx.bezierCurveTo(size*.68,-size*.08,size*.54,size*.72,0,size);ctx.bezierCurveTo(-size*.54,size*.72,-size*.68,-size*.08,0,-size);ctx.fill()}
+    else if(['glass','crystal','rainbowShard'].includes(m.type)){ctx.beginPath();ctx.moveTo(-size*.55,size*.32);ctx.lineTo(-size*(.08+rand()*.12),-size);ctx.lineTo(size*(.48+rand()*.2),-size*.12);ctx.lineTo(size*.28,size*.78);ctx.closePath();ctx.fill(); if(m.type==='rainbowShard'){ctx.globalAlpha*=.5;ctx.fillStyle=i%2?'#aeefff':'#f3b9dd';ctx.fill()}}
+    else if(m.type==='reflection'){const g=ctx.createLinearGradient(0,-size,0,size);g.addColorStop(0,hexToRgba(m.color,.62));g.addColorStop(1,hexToRgba(m.secondaryColor,.12));ctx.fillStyle=g;ellipsePath(ctx,0,0,size*.24,size);ctx.fill()}
+    else if(m.type==='ovalCluster'){ellipsePath(ctx,0,0,size*.38,size*.72,rot);ctx.fill()}
+    else if(m.type==='stippling'){ellipsePath(ctx,0,0,size*(.16+rand()*.26),size*(.14+rand()*.28));ctx.fill()}
+    else if(m.type==='curve'||m.type==='handdrawn'||m.type==='brushStroke'){ctx.lineWidth=Math.max(1,size*(m.type==='brushStroke'?.28:.18));ctx.lineCap='round';ctx.beginPath();ctx.moveTo(-size*.56,size*.1);ctx.quadraticCurveTo((rand()-.5)*size*.2,-size*(.5+rand()*.28),size*.56,size*.08);ctx.stroke()}
+    else if(m.type==='crescent'){ctx.beginPath();ctx.arc(0,0,size*.7,0,Math.PI*2);ctx.fill();ctx.globalCompositeOperation='destination-out';ctx.beginPath();ctx.arc(size*.28,-size*.08,size*.65,0,Math.PI*2);ctx.fill();ctx.globalCompositeOperation='source-over'}
+    else if(m.type==='sparkDust'){if(i%3===0)miniStar(0,0,size*.5,ctx.strokeStyle as string);else{ellipsePath(ctx,0,0,size*.22,size*.22);ctx.fill()}}
+    else {ellipsePath(ctx,-size*.24,0,size*.28,size*.28);ctx.fill();ellipsePath(ctx,size*.42,size*.08,size*.14,size*.14);ctx.fill();ctx.lineWidth=Math.max(1,size*.12);ctx.beginPath();ctx.moveTo(-size*.05,-size*.52);ctx.lineTo(size*.15,-size*.18);ctx.stroke()}
     ctx.restore()
   }
   ctx.restore()
 }
 
-function drawIrisTexture(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV5, mirrorX: boolean) {
-  const t = design.irisTexture
-  const rand = mulberry32(t.seed)
-  const basis = Math.min(bounds.width, bounds.height)
-  const cx = bounds.cx
-  const cy = bounds.cy
-  ctx.save()
-  ctx.globalAlpha = t.opacity
-  ctx.strokeStyle = t.color
-  ctx.fillStyle = t.color
-  const density = Math.max(5, Math.round(t.density))
-
-  if (t.type === 'ripple') {
-    ctx.lineWidth = Math.max(0.7, basis * t.width)
-    for (let i = 0; i < Math.max(3, Math.round(density / 5)); i += 1) {
-      const radius = lerp(0.22, 0.9, (i + 1) / (density / 5 + 1))
-      ctx.globalAlpha = t.opacity * (0.35 + rand() * 0.35)
-      ellipsePath(ctx, cx, cy + basis * 0.08, bounds.width * 0.5 * radius, bounds.height * 0.5 * radius)
-      ctx.stroke()
-    }
-  } else if (t.type === 'speckle') {
-    for (let i = 0; i < density; i += 1) {
-      const angle = rand() * Math.PI * 2
-      const r = Math.sqrt(rand()) * 0.88
-      const x = cx + Math.cos(angle) * bounds.width * 0.46 * r
-      const y = cy + Math.sin(angle) * bounds.height * 0.46 * r
-      const size = basis * (0.006 + rand() * 0.014)
-      ctx.globalAlpha = t.opacity * (0.3 + rand() * 0.6)
-      ctx.fillStyle = rand() > 0.55 ? t.secondaryColor : t.color
-      ellipsePath(ctx, x, y, size, size * (0.7 + rand() * 0.5))
-      ctx.fill()
-    }
+function drawIrisTexture(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV6, mirrorX: boolean) {
+  const t=design.irisTexture; const rand=mulberry32(t.seed); const basis=Math.min(bounds.width,bounds.height); const cx=bounds.cx, cy=bounds.cy; const density=Math.max(5,Math.round(t.density))
+  ctx.save();ctx.globalAlpha=t.opacity;ctx.strokeStyle=t.color;ctx.fillStyle=t.color;ctx.lineCap='round'
+  if(t.type==='ripple'||t.type==='ringLines'){
+    ctx.lineWidth=Math.max(.6,basis*t.width); const loops=Math.max(3,Math.round(density/5)); for(let i=0;i<loops;i++){const radius=lerp(.2,.92,(i+1)/(loops+1));ctx.globalAlpha=t.opacity*(.22+rand()*.28);ctx.strokeStyle=i%3===0?t.secondaryColor:t.color;ellipsePath(ctx,cx,cy+basis*.06,bounds.width*.5*radius,bounds.height*.5*radius);ctx.stroke()}
+  } else if(t.type==='speckle'||t.type==='unevenNoise'){
+    for(let i=0;i<density;i++){const a=rand()*Math.PI*2,r=Math.sqrt(rand())*.9,x=cx+Math.cos(a)*bounds.width*.46*r,y=cy+Math.sin(a)*bounds.height*.46*r,size=basis*(.004+rand()*(t.type==='unevenNoise'?.02:.012));ctx.globalAlpha=t.opacity*(.18+rand()*.6);ctx.fillStyle=rand()>.55?t.secondaryColor:t.color;ellipsePath(ctx,x,y,size,size*(.5+rand()*.8),(rand()-.5));ctx.fill()}
+  } else if(['fogTexture','watercolor','glassTexture','lowerGlowTexture'].includes(t.type)){
+    const blobs=t.type==='watercolor'?10:t.type==='glassTexture'?7:6; for(let i=0;i<blobs;i++){const bx=cx+(rand()-.5)*bounds.width*.65, by=t.type==='lowerGlowTexture'?bounds.minY+bounds.height*(.65+rand()*.25):cy+(rand()-.5)*bounds.height*.55, rr=basis*(.08+rand()*.18);const g=ctx.createRadialGradient(bx,by,0,bx,by,rr);g.addColorStop(0,hexToRgba(i%2?t.secondaryColor:t.color,t.type==='glassTexture'?.32:.24));g.addColorStop(1,hexToRgba(t.color,0));ctx.fillStyle=g;ctx.fillRect(bx-rr,by-rr,rr*2,rr*2)}
+  } else if(t.type==='softBrush'||t.type==='brushStroke'||t.type==='pencil'){
+    const lines=Math.max(8,Math.round(density*.65)); for(let i=0;i<lines;i++){const y=cy+(i/(lines-1)-.5)*bounds.height*.72+(rand()-.5)*basis*.04;ctx.globalAlpha=t.opacity*(.2+rand()*.42);ctx.strokeStyle=i%4===0?t.secondaryColor:t.color;ctx.lineWidth=Math.max(.5,basis*t.width*(t.type==='brushStroke'?1.8:.8));ctx.beginPath();ctx.moveTo(bounds.minX+bounds.width*.16,y);ctx.bezierCurveTo(cx-basis*.15,y+(rand()-.5)*basis*.12,cx+basis*.18,y+(rand()-.5)*basis*.12,bounds.maxX-bounds.width*.16,y+(rand()-.5)*basis*.04);ctx.stroke()}
   } else {
-    ctx.lineCap = 'round'
-    for (let i = 0; i < density; i += 1) {
-      const baseAngle = (i / density) * Math.PI * 2 + (mirrorX ? -t.rotation : t.rotation)
-      const angle = baseAngle + (rand() - 0.5) * t.randomness * (0.3 + t.handDrawnAmount * 0.4)
-      const inner = 0.2 + rand() * 0.12
-      const outer = Math.min(0.96, inner + t.length * (0.56 + rand() * 0.32))
-      const x1 = cx + Math.cos(angle) * bounds.width * 0.5 * inner
-      const y1 = cy + Math.sin(angle) * bounds.height * 0.5 * inner
-      const x2 = cx + Math.cos(angle) * bounds.width * 0.5 * outer
-      const y2 = cy + Math.sin(angle) * bounds.height * 0.5 * outer
-      const wobble = (rand() - 0.5) * basis * 0.06 * t.handDrawnAmount
-      ctx.strokeStyle = rand() > 0.7 ? t.secondaryColor : t.color
-      ctx.globalAlpha = t.opacity * (0.35 + rand() * 0.65)
-      ctx.lineWidth = Math.max(0.5, basis * t.width * (0.55 + rand() * 0.8))
-      ctx.beginPath()
-      ctx.moveTo(x1, y1)
-      ctx.quadraticCurveTo((x1 + x2) * 0.5 - Math.sin(angle) * wobble, (y1 + y2) * 0.5 + Math.cos(angle) * wobble, x2, y2)
-      ctx.stroke()
-    }
+    for(let i=0;i<density;i++){const base=(i/density)*Math.PI*2+(mirrorX?-t.rotation:t.rotation), angle=base+(rand()-.5)*t.randomness*(.3+t.handDrawnAmount*.45), inner=.2+rand()*.12, outer=Math.min(.96,inner+t.length*(.54+rand()*.34));const x1=cx+Math.cos(angle)*bounds.width*.5*inner,y1=cy+Math.sin(angle)*bounds.height*.5*inner,x2=cx+Math.cos(angle)*bounds.width*.5*outer,y2=cy+Math.sin(angle)*bounds.height*.5*outer,wob=(rand()-.5)*basis*.07*t.handDrawnAmount;ctx.strokeStyle=rand()>.72?t.secondaryColor:t.color;ctx.globalAlpha=t.opacity*(.28+rand()*.6);ctx.lineWidth=Math.max(.45,basis*t.width*(.5+rand()*.82));ctx.beginPath();ctx.moveTo(x1,y1);ctx.quadraticCurveTo((x1+x2)*.5-Math.sin(angle)*wob,(y1+y2)*.5+Math.cos(angle)*wob,x2,y2);ctx.stroke()}
   }
   ctx.restore()
 }
 
-function drawOverlayPreset(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV5, mirrorX: boolean) {
+function drawSymbol(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV6, mirrorX: boolean) {
+  const s=design.symbol; const rand=mulberry32(s.seed); const basis=Math.min(bounds.width,bounds.height)
+  const x=bounds.minX+bounds.width*mappedX(s.x,mirrorX), y=bounds.minY+bounds.height*s.y, size=basis*s.scale
+  ctx.save();ctx.translate(x,y);ctx.rotate(mirrorX?-s.rotation:s.rotation);ctx.globalAlpha=s.opacity;if(s.blur>0)ctx.filter=`blur(${s.blur*basis}px)`;ctx.fillStyle=s.color;ctx.strokeStyle=s.color;ctx.lineCap='round';ctx.lineJoin='round'
+  const jitter=()=> (rand()-.5)*size*.12*s.handDrawnAmount
+  const heart=(ox=0,oy=0,k=1,color=s.color)=>{ctx.save();ctx.translate(ox,oy);ctx.scale(k,k);ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(0,size*.72);ctx.bezierCurveTo(size*.9,size*.2,size*.82,-size*.58,0,-size*.14);ctx.bezierCurveTo(-size*.82,-size*.58,-size*.9,size*.2,0,size*.72);ctx.closePath();ctx.fill();ctx.restore()}
+  const star=(ox=0,oy=0,k=1,color=s.color)=>{ctx.save();ctx.translate(ox,oy);ctx.fillStyle=color;ctx.beginPath();for(let i=0;i<10;i++){const a=-Math.PI/2+i*Math.PI/5,r=(i%2===0?size:size*.42)*k+(i%2===0?jitter():jitter()*.4);const px=Math.cos(a)*r,py=Math.sin(a)*r;if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py)}ctx.closePath();ctx.fill();ctx.restore()}
+  const dot=(ox:number,oy:number,k:number,color=s.color)=>{ctx.fillStyle=color;ellipsePath(ctx,ox,oy,size*k,size*k*(.82+rand()*.28));ctx.fill()}
+  const crescent=(ox=0,oy=0,k=1,color=s.color)=>{ctx.save();ctx.fillStyle=color;ctx.beginPath();ctx.arc(ox,oy,size*k,0,Math.PI*2);ctx.fill();ctx.globalCompositeOperation='destination-out';ctx.beginPath();ctx.arc(ox+size*k*.38,oy-size*k*.08,size*k*.88,0,Math.PI*2);ctx.fill();ctx.globalCompositeOperation='source-over';ctx.restore()}
+  const flower=(ox=0,oy=0,k=1,color=s.color)=>{ctx.save();ctx.translate(ox,oy);ctx.fillStyle=color;for(let i=0;i<5;i++){ctx.save();ctx.rotate(i*Math.PI*2/5+jitter()*.01);ellipsePath(ctx,0,-size*.46*k,size*.28*k,size*.48*k);ctx.fill();ctx.restore()}dot(0,0,.18*k,s.secondaryColor);ctx.restore()}
+  if(s.type==='heart') heart()
+  else if(s.type==='doubleHeart'){heart(-size*.32,size*.15,.72);heart(size*.36,-size*.22,.48,s.secondaryColor)}
+  else if(s.type==='crescent') crescent()
+  else if(s.type==='star') star()
+  else if(s.type==='crossSpark'){ctx.lineWidth=Math.max(.8,size*.1);ctx.strokeStyle=s.color;ctx.beginPath();ctx.moveTo(-size,0);ctx.lineTo(size,0);ctx.moveTo(0,-size);ctx.lineTo(0,size);ctx.moveTo(-size*.55,-size*.55);ctx.lineTo(size*.55,size*.55);ctx.moveTo(size*.55,-size*.55);ctx.lineTo(-size*.55,size*.55);ctx.stroke()}
+  else if(s.type==='flower') flower()
+  else if(s.type==='clover'){for(let i=0;i<4;i++){const a=i*Math.PI/2;dot(Math.cos(a)*size*.35,Math.sin(a)*size*.35,.42,i%2?s.secondaryColor:s.color)}dot(0,0,.18,s.color)}
+  else if(s.type==='droplet'){ctx.beginPath();ctx.moveTo(0,-size);ctx.bezierCurveTo(size*.76,-size*.05,size*.62,size*.72,0,size);ctx.bezierCurveTo(-size*.62,size*.72,-size*.76,-size*.05,0,-size);ctx.fill()}
+  else if(s.type==='diamond'){ctx.beginPath();ctx.moveTo(0,-size);ctx.lineTo(size*.72,0);ctx.lineTo(0,size);ctx.lineTo(-size*.72,0);ctx.closePath();ctx.fill()}
+  else if(s.type==='threeDots'){dot(-size*.62,0,.28);dot(0,-size*.12,.38,s.secondaryColor);dot(size*.58,size*.1,.22)}
+  else if(s.type==='heartMoon'){heart(-size*.35,size*.1,.62);crescent(size*.42,-size*.16,.54,s.secondaryColor)}
+  else if(s.type==='starDots'){star(-size*.15,-size*.08,.62);dot(size*.6,-size*.25,.18,s.secondaryColor);dot(size*.44,size*.42,.12)}
+  else if(s.type==='flowerDots'){flower(-size*.08,0,.6);dot(size*.64,-size*.2,.15,s.secondaryColor);dot(size*.5,size*.42,.11)}
+  else if(s.type==='colorDots'){dot(-size*.52,-size*.18,.22,s.color);dot(0,size*.12,.28,s.secondaryColor);dot(size*.56,-size*.05,.16,'#e8c36c')}
+  else {heart(-size*.46,-size*.08,.42);crescent(size*.1,size*.16,.4,s.secondaryColor);star(size*.55,-size*.28,.32,'#e8c7df');dot(size*.62,size*.42,.12,s.secondaryColor)}
+  ctx.restore()
+}
+
+function drawOverlayPreset(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV6, mirrorX: boolean) {
   const o = design.overlayPreset
   const rand = mulberry32(o.seed)
   const basis = Math.min(bounds.width, bounds.height)
@@ -587,7 +505,7 @@ function drawOverlayPreset(ctx: CanvasRenderingContext2D, bounds: ReturnType<typ
   ctx.restore()
 }
 
-function drawHandDrawnTexture(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV5) {
+function drawHandDrawnTexture(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, design: EyeDesignV6) {
   const h = design.handDrawnTexture
   const rand = mulberry32(h.seed)
   const basis = Math.min(bounds.width, bounds.height)
@@ -640,7 +558,7 @@ function drawOverlayImage(
 export function exportFullUvPng(
   originalImage: HTMLImageElement,
   masks: { left: EyeMask; right: EyeMask },
-  design: EyeDesignV5,
+  design: EyeDesignV6,
   overlayImage: HTMLImageElement | null = null,
 ) {
   const canvas = document.createElement('canvas')
@@ -654,7 +572,7 @@ export function exportFullUvPng(
   return canvas.toDataURL('image/png')
 }
 
-export function exportEyePng(mask: EyeMask, design: EyeDesignV5, overlayImage: HTMLImageElement | null = null, padding = 28) {
+export function exportEyePng(mask: EyeMask, design: EyeDesignV6, overlayImage: HTMLImageElement | null = null, padding = 28) {
   const bounds = getMaskBounds(mask)
   const width = Math.ceil(bounds.width + padding * 2)
   const height = Math.ceil(bounds.height + padding * 2)

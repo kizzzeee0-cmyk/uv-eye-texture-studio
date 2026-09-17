@@ -16,11 +16,12 @@ import {
   PUPIL_PRESETS,
   REFLECTION_PRESETS,
   RING_PRESETS,
+  SYMBOL_PRESETS,
   UPPER_SHADOW_PRESETS,
 } from './lib/presets'
-import type { EyeDesignV5, EyeMask, EyeProjectV5, Point, ToolMode, UVFileInfo, ViewState } from './lib/types'
+import type { EyeDesignV6, EyeMask, EyeProjectV6, Point, ToolMode, UVFileInfo, ViewState } from './lib/types'
 
-type Category = 'mask' | 'background' | 'ring' | 'pupil' | 'lowerPoint' | 'upperShadow' | 'reflection' | 'irisTexture' | 'overlayPreset' | 'handDrawnTexture' | 'overlayImage'
+type Category = 'mask' | 'background' | 'ring' | 'pupil' | 'lowerPoint' | 'upperShadow' | 'reflection' | 'symbol' | 'irisTexture' | 'overlayPreset' | 'handDrawnTexture' | 'overlayImage'
 
 const CATEGORY_LABELS: Record<Category, string> = {
   mask: '마스크',
@@ -30,6 +31,7 @@ const CATEGORY_LABELS: Record<Category, string> = {
   lowerPoint: '하단 포인트',
   upperShadow: '상단 그림자',
   reflection: '반사광',
+  symbol: '상징 문양',
   irisTexture: '홍채 결',
   overlayPreset: '문양',
   handDrawnTexture: '손그림 질감',
@@ -62,8 +64,8 @@ function mirrorMask(mask: EyeMask, width: number): EyeMask {
   }
 }
 
-function deepCloneProject(project: EyeProjectV5): EyeProjectV5 {
-  return JSON.parse(JSON.stringify(project)) as EyeProjectV5
+function deepCloneProject(project: EyeProjectV6): EyeProjectV6 {
+  return JSON.parse(JSON.stringify(project)) as EyeProjectV6
 }
 
 function downloadDataUrl(dataUrl: string, fileName: string) {
@@ -93,8 +95,8 @@ export default function App() {
   const [imageElement, setImageElement] = useState<HTMLImageElement | null>(null)
   const [overlayElement, setOverlayElement] = useState<HTMLImageElement | null>(null)
   const [uvInfo, setUvInfo] = useState<UVFileInfo | null>(null)
-  const [project, setProject] = useState<EyeProjectV5>({
-    version: 5,
+  const [project, setProject] = useState<EyeProjectV6>({
+    version: 6,
     masks: { left: makeEllipseMask(200, 150, 65, 65), right: makeEllipseMask(700, 150, 65, 65) },
     design: cloneDesign(CLEAR_DESIGN),
   })
@@ -105,14 +107,14 @@ export default function App() {
   const [draftPoints, setDraftPoints] = useState<Point[]>([])
   const [selectedPointIndex, setSelectedPointIndex] = useState<number | null>(null)
   const [status, setStatus] = useState('UV 텍스처를 열어주세요.')
-  const historyRef = useRef<EyeProjectV5[]>([])
-  const futureRef = useRef<EyeProjectV5[]>([])
+  const historyRef = useRef<EyeProjectV6[]>([])
+  const futureRef = useRef<EyeProjectV6[]>([])
 
   const dragRef = useRef<
     | { type: 'pan'; startX: number; startY: number; offsetX: number; offsetY: number }
-    | { type: 'ellipse'; start: Point; original: EyeProjectV5 }
-    | { type: 'moveMask'; start: Point; original: EyeMask; originalProject: EyeProjectV5 }
-    | { type: 'point'; index: number; originalProject: EyeProjectV5 }
+    | { type: 'ellipse'; start: Point; original: EyeProjectV6 }
+    | { type: 'moveMask'; start: Point; original: EyeMask; originalProject: EyeProjectV6 }
+    | { type: 'point'; index: number; originalProject: EyeProjectV6 }
     | null
   >(null)
 
@@ -150,7 +152,7 @@ export default function App() {
     futureRef.current = []
   }
 
-  function commitProject(updater: (current: EyeProjectV5) => EyeProjectV5) {
+  function commitProject(updater: (current: EyeProjectV6) => EyeProjectV6) {
     setProject((current) => {
       historyRef.current.push(deepCloneProject(current))
       if (historyRef.current.length > 80) historyRef.current.shift()
@@ -175,26 +177,26 @@ export default function App() {
     setStatus('다시 실행했습니다.')
   }
 
-  function updateDesign(section: keyof EyeDesignV5, patch: Record<string, unknown>, withHistory = false) {
-    const apply = (current: EyeProjectV5) => ({
+  function updateDesign(section: keyof EyeDesignV6, patch: Record<string, unknown>, withHistory = false) {
+    const apply = (current: EyeProjectV6) => ({
       ...current,
       design: {
         ...current.design,
         [section]: { ...(current.design[section] as object), ...patch },
       },
-    }) as EyeProjectV5
+    }) as EyeProjectV6
     if (withHistory) commitProject(apply)
     else setProject((current) => apply(current))
   }
 
-  function clearSection(section: keyof EyeDesignV5) {
+  function clearSection(section: keyof EyeDesignV6) {
     commitProject((current) => ({
       ...current,
       design: { ...current.design, [section]: JSON.parse(JSON.stringify(CLEAR_DESIGN[section])) },
-    }) as EyeProjectV5)
+    }) as EyeProjectV6)
   }
 
-  function togglePreset(section: keyof EyeDesignV5, name: string, patch: any) {
+  function togglePreset(section: keyof EyeDesignV6, name: string, patch: any) {
     const currentSection = project.design[section] as any
     if (currentSection.enabled && currentSection.presetId === name) {
       clearSection(section)
@@ -220,15 +222,15 @@ export default function App() {
     setStatus('100% 보기로 변경했습니다.')
   }
 
-  function applyDetectedMasks(image: HTMLImageElement, currentSource?: EyeProjectV5['source']) {
+  function applyDetectedMasks(image: HTMLImageElement, currentSource?: EyeProjectV6['source']) {
     try {
       const detected = detectEyeMasksFromAlpha(image)
-      setProject({ version: 5, masks: detected.masks, design: cloneDesign(CLEAR_DESIGN), source: currentSource })
+      setProject({ version: 6, masks: detected.masks, design: cloneDesign(CLEAR_DESIGN), source: currentSource })
       setToolMode('editPoints')
       setStatus(`눈 위치 자동 인식 완료. ${detected.message} 현재 디자인은 모두 꺼진 클리어 상태입니다.`)
     } catch (error) {
       const fallback = createDefaultMasks(image.naturalWidth, image.naturalHeight)
-      setProject({ version: 5, masks: fallback, design: cloneDesign(CLEAR_DESIGN), source: currentSource })
+      setProject({ version: 6, masks: fallback, design: cloneDesign(CLEAR_DESIGN), source: currentSource })
       setToolMode('moveMask')
       setStatus(`자동 인식 실패: ${error instanceof Error ? error.message : '알 수 없는 오류'} 수동 마스크를 사용해주세요.`)
     }
@@ -436,18 +438,18 @@ export default function App() {
   const exportFull = () => {
     if (!imageElement || !uvInfo) return
     const data = exportFullUvPng(imageElement, project.masks, project.design, overlayElement)
-    downloadDataUrl(data, `${uvInfo.name.replace(/\.png$/i, '')}-v05-eye.png`)
+    downloadDataUrl(data, `${uvInfo.name.replace(/\.png$/i, '')}-v06-eye.png`)
     setStatus('전체 UV PNG를 저장했습니다.')
   }
 
   const exportEye = () => {
     const data = exportEyePng(project.masks.left, project.design, overlayElement)
-    downloadDataUrl(data, 'iris-v05.png')
+    downloadDataUrl(data, 'iris-v06.png')
     setStatus('눈동자 PNG를 저장했습니다.')
   }
 
   const saveProject = () => {
-    downloadText(JSON.stringify(project, null, 2), 'uv-eye-project-v0.5.json')
+    downloadText(JSON.stringify(project, null, 2), 'uv-eye-project-v0.6.json')
     setStatus('프로젝트 JSON을 저장했습니다.')
   }
 
@@ -457,11 +459,11 @@ export default function App() {
     const reader = new FileReader()
     reader.onload = () => {
       try {
-        const parsed = JSON.parse(String(reader.result)) as EyeProjectV5
-        if (parsed.version !== 5 || !parsed.masks || !parsed.design) throw new Error('v0.5 프로젝트 파일이 아닙니다.')
+        const parsed = JSON.parse(String(reader.result)) as EyeProjectV6
+        if (parsed.version !== 6 || !parsed.masks || !parsed.design) throw new Error('v0.6 프로젝트 파일이 아닙니다.')
         pushHistory()
         setProject(parsed)
-        setStatus('v0.5 프로젝트 설정을 불러왔습니다. 원본 UV가 다르면 다시 열어주세요.')
+        setStatus('v0.6 프로젝트 설정을 불러왔습니다. 원본 UV가 다르면 다시 열어주세요.')
       } catch (error) {
         setStatus(`프로젝트 불러오기 실패: ${error instanceof Error ? error.message : '파일 오류'}`)
       }
@@ -471,16 +473,16 @@ export default function App() {
   }
 
   const saveBrowser = () => {
-    localStorage.setItem('uv-eye-studio-v05-project', JSON.stringify(project))
+    localStorage.setItem('uv-eye-studio-v06-project', JSON.stringify(project))
     setStatus('현재 설정을 이 브라우저에 저장했습니다.')
   }
 
   const loadBrowser = () => {
-    const raw = localStorage.getItem('uv-eye-studio-v05-project')
-    if (!raw) { setStatus('브라우저에 저장된 v0.5 설정이 없습니다.'); return }
+    const raw = localStorage.getItem('uv-eye-studio-v06-project')
+    if (!raw) { setStatus('브라우저에 저장된 v0.6 설정이 없습니다.'); return }
     try {
       pushHistory()
-      setProject(JSON.parse(raw) as EyeProjectV5)
+      setProject(JSON.parse(raw) as EyeProjectV6)
       setStatus('브라우저 저장 설정을 불러왔습니다.')
     } catch { setStatus('브라우저 저장 데이터를 읽지 못했습니다.') }
   }
@@ -511,7 +513,7 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <div className="app-title">UV Eye Texture Studio <span>v0.5</span></div>
+          <div className="app-title">UV Eye Texture Studio <span>v0.6</span></div>
           <div className="app-subtitle">양안 대칭 · 세부 요소 조합형 UV 눈동자 편집기</div>
         </div>
         <div className="topbar-actions">
@@ -618,7 +620,7 @@ export default function App() {
 }
 
 function CategoryPanel({ category, project, updateDesign, clearSection, togglePreset, overlayInputRef, updateMaskFeather }: any) {
-  const d = project.design as EyeDesignV5
+  const d = project.design as EyeDesignV6
   if (category === 'mask') {
     return <section><h3>마스크 설정</h3><RangeField label="경계 부드러움" value={project.masks.left.feather} min={0} max={20} step={0.5} onChange={updateMaskFeather} /><div className="hint">다각형 점 편집: 점 드래그 / Shift+선 클릭=점 추가 / Alt+점 클릭=점 삭제</div></section>
   }
@@ -646,6 +648,7 @@ function CategoryPanel({ category, project, updateDesign, clearSection, togglePr
   if (category === 'pupil') return (
     <>
       <PresetGrid title="동공 모양" section="pupil" active={d.pupil.presetId} presets={PUPIL_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <div className="hint">동공은 별도의 테두리 선 없이 내부 그라데이션과 음영만으로 형태를 표현합니다.</div>
       <SectionCard title="동공 위치와 크기">
         <RangeField label="위치 X" value={d.pupil.x} min={0.15} max={0.85} step={0.005} onChange={(v) => updateDesign('pupil', { x: v })} />
         <RangeField label="위치 Y" value={d.pupil.y} min={0.15} max={0.85} step={0.005} onChange={(v) => updateDesign('pupil', { y: v })} />
@@ -658,7 +661,6 @@ function CategoryPanel({ category, project, updateDesign, clearSection, togglePr
         <ColorField label="상단" value={d.pupil.topColor} onChange={(v) => updateDesign('pupil', { topColor: v })} />
         <ColorField label="중앙" value={d.pupil.midColor} onChange={(v) => updateDesign('pupil', { midColor: v })} />
         <ColorField label="하단" value={d.pupil.bottomColor} onChange={(v) => updateDesign('pupil', { bottomColor: v })} />
-        <ColorField label="외곽" value={d.pupil.edgeColor} onChange={(v) => updateDesign('pupil', { edgeColor: v })} />
         <RangeField label="그라데이션 깊이" value={d.pupil.gradientStrength} min={0} max={1} step={0.01} onChange={(v) => updateDesign('pupil', { gradientStrength: v })} />
       </SectionCard>
     </>
@@ -684,6 +686,20 @@ function CategoryPanel({ category, project, updateDesign, clearSection, togglePr
       <PresetGrid title="반사광" section="reflection" active={d.reflection.presetId} presets={REFLECTION_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
       <TransformControls state={d.reflection} update={(patch: any) => updateDesign('reflection', patch)} />
       <SectionCard title="반사광 표현"><ColorField label="주 색상" value={d.reflection.color} onChange={(v) => updateDesign('reflection', { color: v })} /><ColorField label="보조 색상" value={d.reflection.secondaryColor} onChange={(v) => updateDesign('reflection', { secondaryColor: v })} /><OpacityField value={d.reflection.opacity} onChange={(v) => updateDesign('reflection', { opacity: v })} /><RangeField label="블러" value={d.reflection.blur} min={0} max={0.2} step={0.005} onChange={(v) => updateDesign('reflection', { blur: v })} /><RangeField label="손그림 느낌" value={d.reflection.handDrawnAmount} min={0} max={1} step={0.01} onChange={(v) => updateDesign('reflection', { handDrawnAmount: v })} /></SectionCard>
+    </>
+  )
+
+  if (category === 'symbol') return (
+    <>
+      <PresetGrid title="상징 문양" section="symbol" active={d.symbol.presetId} presets={SYMBOL_PRESETS} clearSection={clearSection} togglePreset={togglePreset} />
+      <SectionCard title="문양 위치와 크기">
+        <RangeField label="위치 X" value={d.symbol.x} min={0} max={1} step={0.005} onChange={(v) => updateDesign('symbol', { x: v })} />
+        <RangeField label="위치 Y" value={d.symbol.y} min={0} max={1} step={0.005} onChange={(v) => updateDesign('symbol', { y: v })} />
+        <RangeField label="크기" value={d.symbol.scale} min={0.02} max={0.4} step={0.005} onChange={(v) => updateDesign('symbol', { scale: v })} />
+        <RangeField label="회전" value={d.symbol.rotation} min={-3.14} max={3.14} step={0.01} onChange={(v) => updateDesign('symbol', { rotation: v })} />
+        <OpacityField value={d.symbol.opacity} onChange={(v) => updateDesign('symbol', { opacity: v })} />
+      </SectionCard>
+      <SectionCard title="문양 표현"><ColorField label="주 색상" value={d.symbol.color} onChange={(v) => updateDesign('symbol', { color: v })} /><ColorField label="보조 색상" value={d.symbol.secondaryColor} onChange={(v) => updateDesign('symbol', { secondaryColor: v })} /><RangeField label="블러" value={d.symbol.blur} min={0} max={0.12} step={0.002} onChange={(v) => updateDesign('symbol', { blur: v })} /><RangeField label="손그림 느낌" value={d.symbol.handDrawnAmount} min={0} max={1} step={0.01} onChange={(v) => updateDesign('symbol', { handDrawnAmount: v })} /></SectionCard>
     </>
   )
 

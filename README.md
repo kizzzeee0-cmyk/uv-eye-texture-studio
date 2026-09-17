@@ -1,102 +1,60 @@
-# UV Eye Texture Studio v0.3
+# UV Eye Texture Studio v0.4
 
-UV / VRM / VRC / VTuber용 눈동자 텍스처를 브라우저 안에서 비파괴 방식으로 디자인하는 실험적 웹 에디터입니다.
+A small local browser tool for designing anime / VTuber style eye UV textures directly on top of a PNG UV sheet.
 
-## v0.3 핵심 기능
+## What changed in v0.4
 
-- PNG UV 텍스처 업로드
-- Zoom / Pan / Fit / 100%
-- Left / Right Eye 독립 Mask
-- Ellipse Mask 새로 그리기
-- **Polygon Free-form Mask**
-  - 캔버스를 자유롭게 클릭해서 점 생성
-  - 첫 점 클릭 또는 Complete로 닫기
-  - 점 Drag 수정
-  - Shift + Click edge = 점 추가
-  - Alt + Click point = 점 삭제
-  - 전체 Mask 이동
-  - Inward Feather
-- 5-stop Iris Gradient
-- Upper Shadow / Lower Glow
-- Outer Ring / Inner Ring / Extra Inner Ring
-- Circle / Oval Pupil
-- Seed 기반 Radial Texture
-- Soft Texture
-- Lower Motif 6종
-  - Petal
-  - Dash
-  - Droplet
-  - Glass
-  - Wave
-  - Oval Cluster
-- Reflection 4종
-- Highlight Group 6종
-- Particle 4종
-- 10개 Starter Preset
-- Seed Randomizer + 카테고리별 Random 잠금
-- Left ↔ Right 디자인 복사
-- Design Link
-- Browser Local Save
-- Project JSON Save / Load
-- Full UV PNG Export
-- Transparent Single Iris Export
+- **Alpha-based eye auto detection**
+  - Detects left/right eye UV areas from visible non-transparent islands in a PNG.
+  - Best for PNGs where only the eye UV islands are opaque and the surrounding area is transparent.
+- **Detailed element preset libraries** instead of relying only on full finished eye presets.
+  - Background / gradient presets
+  - Lower motif presets (wave, petals, droplet, light reflection, mixed points)
+  - Pupil presets (circle, oval, heart, petal, slit)
+  - Upper shadow / eyelash reflection presets
+  - Reflection presets
+  - Highlight presets
+  - Particle presets
+- **New rendering features**
+  - New pupil shapes: heart, petal, slit
+  - New lower motif types: lightShards, mixedPoints
+  - New reflection type: topBand
+  - New highlight preset: sparkleArc
+- **Project version updated to 4**
+  - Browser save key changed to `uv-eye-studio-v04-settings`
+  - JSON export format version changed to `4`
 
-## UV 보호 원칙
-
-Full PNG Export는 원본 PNG를 먼저 그린 뒤, Eye Design을 Mask 내부에만 합성합니다.
-
-- Canvas 크기 변경 없음
-- 원본 UV 좌표 이동 없음
-- Hard Mask 외부에는 디자인을 그리지 않음
-- Feather는 hard mask 밖으로 번지지 않도록 inward 방식으로 처리
-
-PNG 인코딩 자체의 메타데이터/압축 바이트까지 원본과 동일하게 유지하는 도구는 아니지만, 편집 렌더링은 지정된 mask 내부로 제한됩니다.
-
-## 실행
-
-Node.js 18+ 권장.
+## Run locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-터미널에 표시되는 localhost 주소를 Chrome에서 엽니다.
-
-## 빌드
+## Build
 
 ```bash
+npm install
 npm run build
 ```
 
-결과 폴더: `dist`
+## Main workflow
 
-## Cloudflare Pages
+1. Open a PNG UV texture.
+2. Click **Auto Detect Eyes** if the eye UV islands are isolated by transparency.
+3. Refine the masks with:
+   - Draw Ellipse
+   - Polygon Click
+   - Edit Points
+   - Move Mask
+4. Build the iris using the **Detailed Element Presets**.
+5. Fine-tune every layer in the right panel.
+6. Export:
+   - **Export Eye** for the selected iris only
+   - **Export Full PNG** for the complete UV sheet
 
-- Framework: Vite
-- Build command: `npm run build`
-- Build output directory: `dist`
+## Notes
 
-## 주요 파일
-
-- `src/App.tsx` — 전체 UI / Mask 조작 / 저장
-- `src/lib/types.ts` — 프로젝트 데이터 구조
-- `src/lib/presets.ts` — 기본 디자인과 10개 프리셋
-- `src/lib/irisRenderer.ts` — 실제 눈동자 procedural renderer
-- `src/lib/mask.ts` — Ellipse/Polygon mask 계산
-- `src/lib/random.ts` — Seed randomizer
-- `src/styles.css` — UI 디자인
-
-자세한 수정법은 `MODIFY-GUIDE-KO.md`를 확인하세요.
-
-## v0.3에서 아직 없는 기능
-
-- Brush/Lasso Mask
-- 자동 홍채 영역 탐지
-- Undo / Redo History
-- Photoshop식 자유 Layer 순서 변경
-- 4/8/12 Variation 비교창
-- 원본 PNG Blob을 포함한 완전한 IndexedDB 프로젝트 복원
-- VRM/GLB 3D 실시간 Preview
-
-이 기능들은 v0.4 이후 확장하기 좋은 구조로 분리되어 있습니다.
+- The tool is designed to work **fully in the browser**.
+- The source PNG is **not embedded** inside browser save / project JSON.
+- If you load a saved project, you may need to reopen the matching source PNG.

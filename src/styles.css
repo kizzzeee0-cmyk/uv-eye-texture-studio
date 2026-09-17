@@ -175,3 +175,27 @@ h3 { margin: 0 0 9px; color: #dbe2fa; font-size: 13px; letter-spacing: .025em; }
   .workspace { grid-template-columns: 250px minmax(430px, 1fr) 330px; }
   .app-shell { min-width: 1020px; }
 }
+
+.preset-library {
+  display: grid;
+  gap: 8px;
+}
+.preset-library details {
+  border: 1px solid #28334b;
+  border-radius: 10px;
+  background: #111722;
+  overflow: hidden;
+}
+.preset-library summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 9px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #d9e0f7;
+  background: #171f2f;
+}
+.preset-library summary::-webkit-details-marker { display: none; }
+.compact-grid {
+  padding: 8px;
+}

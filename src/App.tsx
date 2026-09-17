@@ -3,8 +3,21 @@ import type { ChangeEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactP
 import { clamp, imageToScreen, nearestPointIndex, nearestSegmentIndex, screenToImage } from './lib/math'
 import { cloneMask, makeEllipseMask, makePolygonMask, pointInMask, translateMask } from './lib/mask'
 import { compositeIrisDesign, exportFullUvPng, exportSingleIrisPng } from './lib/irisRenderer'
-import { cloneStyle, DEFAULT_STYLE, PRESETS } from './lib/presets'
+import {
+  applyStylePatch,
+  BASE_PRESETS,
+  cloneStyle,
+  DEFAULT_STYLE,
+  HIGHLIGHT_PRESET_PATCHES,
+  LOWER_MOTIF_PRESETS,
+  PARTICLE_PRESETS,
+  PRESETS,
+  PUPIL_PRESETS,
+  REFLECTION_PRESETS,
+  UPPER_ACCENT_PRESETS,
+} from './lib/presets'
 import { randomizeStyle } from './lib/random'
+import { detectEyeMasksFromAlpha } from './lib/detect'
 import type {
   EyeMask,
   EyeSide,
@@ -24,6 +37,12 @@ const TOOL_LABELS: Record<ToolMode, string> = {
   editPoints: 'Edit Points',
   moveMask: 'Move Mask',
 }
+
+const PUPIL_SHAPES = ['circle', 'oval', 'heart', 'petal', 'slit']
+const MOTIF_TYPES = ['petal', 'dash', 'droplet', 'glass', 'wave', 'ovalCluster', 'lightShards', 'mixedPoints']
+const REFLECTION_TYPES = ['softPatch', 'curved', 'side', 'haze', 'topBand']
+const HIGHLIGHT_TYPES = ['singleLarge', 'animeStandard', 'glassyDouble', 'cluster', 'sideHighlight', 'topDome', 'sparkleArc']
+const PARTICLE_TYPES = ['dot', 'star', 'diamond', 'tinyCircle']
 
 function createDefaultMasks(width: number, height: number): Record<EyeSide, EyeMask> {
   const radius = Math.max(28, Math.round(Math.min(width, height) * 0.055))
@@ -141,12 +160,26 @@ export default function App() {
       setView({ zoom: 1, offsetX: 0, offsetY: 0 })
       setSelectedEye('left')
       setToolMode('moveMask')
-      setStatus(`Loaded ${file.name}. Place or redraw each eye mask.`)
+      setStatus(`Loaded ${file.name}. Use Auto Detect from Alpha if the eyes are isolated by transparency, or place the masks manually.`)
       URL.revokeObjectURL(url)
     }
     image.onerror = () => setStatus('The PNG could not be decoded.')
     image.src = url
     event.target.value = ''
+  }
+
+  const autoDetectMasks = () => {
+    if (!imageElement) return
+    try {
+      const result = detectEyeMasksFromAlpha(imageElement)
+      setMasks(result.masks)
+      setDraftPoints([])
+      setSelectedPointIndex(null)
+      setToolMode('editPoints')
+      setStatus(`${result.message} You can refine them with Edit Points.`)
+    } catch (error) {
+      setStatus(`Auto detect failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
   }
 
   useEffect(() => {
@@ -179,7 +212,7 @@ export default function App() {
 
     drawMaskOverlay(ctx, leftScreen, selectedEye === 'left', '#83a9ff', toolMode === 'editPoints' && selectedEye === 'left' ? selectedPointIndex : null)
     drawMaskOverlay(ctx, rightScreen, selectedEye === 'right', '#ff8fc9', toolMode === 'editPoints' && selectedEye === 'right' ? selectedPointIndex : null)
-    drawDraftPolygon(ctx, draftPoints.map((point) => imagePointToScreen(point, canvasSize, uvInfo, view)), selectedEye === 'left' ? '#83a9ff' : '#ff8fc9')
+    drawDraftPolygon(ctx, draftPoints.map((point: Point) => imagePointToScreen(point, canvasSize, uvInfo, view)), selectedEye === 'left' ? '#83a9ff' : '#ff8fc9')
   }, [canvasSize, draftPoints, imageElement, masks, selectedEye, selectedPointIndex, styles, toolMode, uvInfo, view])
 
   const eventImagePoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -215,7 +248,7 @@ export default function App() {
 
     if (toolMode === 'ellipse') {
       dragRef.current = { type: 'ellipse', start: point }
-      setMasks((prev) => ({ ...prev, [selectedEye]: makeEllipseMask(point.x, point.y, 2, 2) }))
+      setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: makeEllipseMask(point.x, point.y, 2, 2) }))
       return
     }
 
@@ -227,7 +260,7 @@ export default function App() {
           return
         }
       }
-      setDraftPoints((prev) => [...prev, point])
+      setDraftPoints((prev: Point[]) => [...prev, point])
       setStatus('Polygon point added. Click around the iris; click the first point or Complete when finished.')
       return
     }
@@ -245,8 +278,8 @@ export default function App() {
       const nearest = nearestPointIndex(point, selectedMask.points)
 
       if (event.altKey && nearest.index >= 0 && nearest.distance <= threshold && selectedMask.points.length > 3) {
-        const points = selectedMask.points.filter((_, index) => index !== nearest.index)
-        setMasks((prev) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
+        const points = selectedMask.points.filter((_: Point, index: number) => index !== nearest.index)
+        setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
         setSelectedPointIndex(null)
         setStatus('Polygon point deleted.')
         return
@@ -257,7 +290,7 @@ export default function App() {
         if (segment.index >= 0 && segment.distance <= threshold * 1.5) {
           const points = [...selectedMask.points]
           points.splice(segment.index + 1, 0, point)
-          setMasks((prev) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
+          setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
           setSelectedPointIndex(segment.index + 1)
           setStatus('Polygon point inserted. Drag it to refine the edge.')
           return
@@ -283,7 +316,7 @@ export default function App() {
       const rect = event.currentTarget.getBoundingClientRect()
       const screenX = event.clientX - rect.left
       const screenY = event.clientY - rect.top
-      setView((prev) => ({ ...prev, offsetX: drag.offsetX + (screenX - drag.startX), offsetY: drag.offsetY + (screenY - drag.startY) }))
+      setView((prev: ViewState) => ({ ...prev, offsetX: drag.offsetX + (screenX - drag.startX), offsetY: drag.offsetY + (screenY - drag.startY) }))
       return
     }
 
@@ -292,7 +325,7 @@ export default function App() {
       const maxX = Math.max(drag.start.x, point.x)
       const minY = Math.min(drag.start.y, point.y)
       const maxY = Math.max(drag.start.y, point.y)
-      setMasks((prev) => ({
+      setMasks((prev: Record<EyeSide, EyeMask>) => ({
         ...prev,
         [selectedEye]: makeEllipseMask((minX + maxX) / 2, (minY + maxY) / 2, Math.max(2, (maxX - minX) / 2), Math.max(2, (maxY - minY) / 2)),
       }))
@@ -302,13 +335,13 @@ export default function App() {
     if (drag.type === 'moveMask') {
       const dx = point.x - drag.start.x
       const dy = point.y - drag.start.y
-      setMasks((prev) => ({ ...prev, [selectedEye]: translateMask(drag.original, dx, dy) }))
+      setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: translateMask(drag.original, dx, dy) }))
       return
     }
 
     if (drag.type === 'point' && selectedMask.type === 'polygon') {
-      const points = selectedMask.points.map((candidate, index) => index === drag.index ? { ...point } : candidate)
-      setMasks((prev) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
+      const points = selectedMask.points.map((candidate: Point, index: number) => index === drag.index ? { ...point } : candidate)
+      setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
     }
   }
 
@@ -323,7 +356,7 @@ export default function App() {
       return
     }
     const feather = selectedMask.feather
-    setMasks((prev) => ({ ...prev, [selectedEye]: { ...makePolygonMask(draftPoints), feather } }))
+    setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...makePolygonMask(draftPoints), feather } }))
     setDraftPoints([])
     setToolMode('editPoints')
     setStatus('Polygon mask completed. Drag points; Shift+click edge adds a point; Alt+click point deletes it.')
@@ -331,23 +364,23 @@ export default function App() {
 
   const deleteSelectedPoint = () => {
     if (selectedMask.type !== 'polygon' || selectedPointIndex === null || selectedMask.points.length <= 3) return
-    const points = selectedMask.points.filter((_, index) => index !== selectedPointIndex)
-    setMasks((prev) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
+    const points = selectedMask.points.filter((_: Point, index: number) => index !== selectedPointIndex)
+    setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...selectedMask, points } }))
     setSelectedPointIndex(null)
     setStatus('Selected polygon point deleted.')
   }
 
   const updateMaskFeather = (value: number) => {
-    setMasks((prev) => ({ ...prev, [selectedEye]: { ...prev[selectedEye], feather: Math.max(0, value) } as EyeMask }))
+    setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...prev[selectedEye], feather: Math.max(0, value) } as EyeMask }))
   }
 
   const updateEllipse = (key: 'cx' | 'cy' | 'rx' | 'ry' | 'rotation', value: number) => {
     if (selectedMask.type !== 'ellipse') return
-    setMasks((prev) => ({ ...prev, [selectedEye]: { ...selectedMask, [key]: value } }))
+    setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: { ...selectedMask, [key]: value } }))
   }
 
   const updateStyleSection = (section: keyof EyeStyle, key: string, value: unknown) => {
-    setStyles((prev) => {
+    setStyles((prev: Record<EyeSide, EyeStyle>) => {
       const selected = cloneStyle(prev[selectedEye])
       const target = selected[section]
       if (typeof target === 'object' && target !== null) {
@@ -370,7 +403,7 @@ export default function App() {
   }
 
   const updateOpacity = (value: number) => {
-    setStyles((prev) => {
+    setStyles((prev: Record<EyeSide, EyeStyle>) => {
       const selected = cloneStyle(prev[selectedEye]); selected.opacity = value
       if (!linkEyes) return { ...prev, [selectedEye]: selected }
       const otherEye: EyeSide = selectedEye === 'left' ? 'right' : 'left'
@@ -380,25 +413,36 @@ export default function App() {
   }
 
   const applyStyle = (style: EyeStyle) => {
-    setStyles((prev) => {
+    setStyles((prev: Record<EyeSide, EyeStyle>) => {
       if (!linkEyes) return { ...prev, [selectedEye]: cloneStyle(style) }
       return { left: cloneStyle(style), right: cloneStyle(style) }
     })
   }
 
+  const applyPatch = (patch: Parameters<typeof applyStylePatch>[1], label: string) => {
+    setStyles((prev: Record<EyeSide, EyeStyle>) => {
+      const nextSelected = applyStylePatch(prev[selectedEye], patch)
+      if (!linkEyes) return { ...prev, [selectedEye]: nextSelected }
+      const otherEye: EyeSide = selectedEye === 'left' ? 'right' : 'left'
+      const nextOther = applyStylePatch(prev[otherEye], patch)
+      return { ...prev, [selectedEye]: nextSelected, [otherEye]: nextOther }
+    })
+    setStatus(`${label} preset applied${linkEyes ? ' to both eyes' : ` to ${selectedEye}`}.`)
+  }
+
   const applyPreset = (name: string) => {
     applyStyle(PRESETS[name])
-    setStatus(`Preset applied: ${name}`)
+    setStatus(`Full eye preset applied: ${name}`)
   }
 
   const randomize = (randomSeed = seed) => {
     const next = randomizeStyle(selectedStyle, randomSeed, randomOptions)
     applyStyle(next)
-    setStatus(`Generated design from seed ${randomSeed}. Same seed + same options = same design.`)
+    setStatus(`Generated design from seed ${randomSeed}. Same seed + same options = same result.`)
   }
 
   const makeProjectSettings = (): SavedProjectSettings => ({
-    version: 3,
+    version: 4,
     seed,
     linkEyes,
     selectedEye,
@@ -419,19 +463,19 @@ export default function App() {
   }
 
   const saveLocal = () => {
-    localStorage.setItem('uv-eye-studio-v03-settings', JSON.stringify(makeProjectSettings()))
+    localStorage.setItem('uv-eye-studio-v04-settings', JSON.stringify(makeProjectSettings()))
     setStatus('Project settings saved in this browser. The source PNG is not embedded.')
   }
 
   const loadLocal = () => {
-    const raw = localStorage.getItem('uv-eye-studio-v03-settings')
+    const raw = localStorage.getItem('uv-eye-studio-v04-settings')
     if (!raw) {
-      setStatus('No v0.3 browser save found.')
+      setStatus('No v0.4 browser save found.')
       return
     }
     try {
       const data = JSON.parse(raw) as SavedProjectSettings
-      if (data.version !== 3) throw new Error('Wrong project version')
+      if (data.version !== 4) throw new Error('Wrong project version')
       applyProjectSettings(data)
       setStatus('Browser save loaded. Re-open the matching PNG if necessary.')
     } catch {
@@ -440,7 +484,7 @@ export default function App() {
   }
 
   const exportProjectJson = () => {
-    downloadText(JSON.stringify(makeProjectSettings(), null, 2), 'uv-eye-project-v0.3.json')
+    downloadText(JSON.stringify(makeProjectSettings(), null, 2), 'uv-eye-project-v0.4.json')
     setStatus('Project JSON exported. It stores masks/design settings, not the PNG pixels.')
   }
 
@@ -451,11 +495,11 @@ export default function App() {
     reader.onload = () => {
       try {
         const data = JSON.parse(String(reader.result)) as SavedProjectSettings
-        if (data.version !== 3 || !data.masks || !data.styles) throw new Error('Invalid v0.3 project')
+        if (data.version !== 4 || !data.masks || !data.styles) throw new Error('Invalid v0.4 project')
         applyProjectSettings(data)
         setStatus('Project JSON imported.')
       } catch {
-        setStatus('Could not import that file. Please use a v0.3 project JSON.')
+        setStatus('Could not import that file. Please use a v0.4 project JSON.')
       }
     }
     reader.readAsText(file)
@@ -466,7 +510,7 @@ export default function App() {
     if (!imageElement || !uvInfo) return
     try {
       const dataUrl = exportFullUvPng(imageElement, masks, styles)
-      downloadDataUrl(dataUrl, uvInfo.name.replace(/\.png$/i, '') + '-v03-eyes.png')
+      downloadDataUrl(dataUrl, uvInfo.name.replace(/\.png$/i, '') + '-v04-eyes.png')
       setStatus('Full UV PNG exported at the original resolution. Drawing is clipped inside the hard masks.')
     } catch (error) {
       setStatus(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -475,7 +519,7 @@ export default function App() {
 
   const exportSelected = () => {
     try {
-      downloadDataUrl(exportSingleIrisPng(selectedMask, selectedStyle), `${selectedEye}-iris-v03.png`)
+      downloadDataUrl(exportSingleIrisPng(selectedMask, selectedStyle), `${selectedEye}-iris-v04.png`)
       setStatus(`${selectedEye} iris exported on a transparent background.`)
     } catch (error) {
       setStatus(`Iris export failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -483,7 +527,7 @@ export default function App() {
   }
 
   const copyStyle = (from: EyeSide, to: EyeSide) => {
-    setStyles((prev) => ({ ...prev, [to]: cloneStyle(prev[from]) }))
+    setStyles((prev: Record<EyeSide, EyeStyle>) => ({ ...prev, [to]: cloneStyle(prev[from]) }))
     setStatus(`Copied ${from} iris design to ${to}. Mask position was not copied.`)
   }
 
@@ -491,11 +535,12 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand-block">
-          <div className="app-title">UV Eye Texture Studio <span>v0.3</span></div>
-          <div className="app-subtitle">Free-form UV mask + layered procedural iris designer</div>
+          <div className="app-title">UV Eye Texture Studio <span>v0.4</span></div>
+          <div className="app-subtitle">Alpha auto-detect + detailed element preset libraries for building richer iris UVs</div>
         </div>
         <div className="topbar-actions">
           <button className="primary" onClick={() => fileInputRef.current?.click()}>Open UV Texture</button>
+          <button onClick={autoDetectMasks} disabled={!canEdit}>Auto Detect Eyes</button>
           <button onClick={fitView} disabled={!canEdit}>Fit</button>
           <button onClick={resetTo100} disabled={!canEdit}>100%</button>
           <button onClick={exportSelected} disabled={!canEdit}>Export Eye</button>
@@ -516,6 +561,10 @@ export default function App() {
                   {TOOL_LABELS[tool]}
                 </button>
               ))}
+            </div>
+            <div className="button-grid two-col">
+              <button onClick={autoDetectMasks} disabled={!canEdit}>Detect from Alpha</button>
+              <button onClick={() => { setMasks((prev: Record<EyeSide, EyeMask>) => ({ ...prev, [selectedEye]: createDefaultMasks(uvInfo?.width ?? 1024, uvInfo?.height ?? 1024)[selectedEye] })); setStatus('Selected eye mask reset to a default ellipse.') }} disabled={!canEdit}>Reset Eye Mask</button>
             </div>
             {toolMode === 'polygon' && (
               <div className="subpanel polygon-actions">
@@ -549,7 +598,20 @@ export default function App() {
           </section>
 
           <section>
-            <h3>10 Starter Presets</h3>
+            <h3>Detailed Element Presets</h3>
+            <div className="preset-library">
+              <PresetGroup title="Background / Gradient" items={BASE_PRESETS} onApply={(name, patch) => applyPatch(patch, `Gradient · ${name}`)} />
+              <PresetGroup title="Lower Point Motifs" items={LOWER_MOTIF_PRESETS} onApply={(name, patch) => applyPatch(patch, `Lower motif · ${name}`)} />
+              <PresetGroup title="Pupil Shapes" items={PUPIL_PRESETS} onApply={(name, patch) => applyPatch(patch, `Pupil · ${name}`)} />
+              <PresetGroup title="Upper Shadow / Lash Reflection" items={UPPER_ACCENT_PRESETS} onApply={(name, patch) => applyPatch(patch, `Upper accent · ${name}`)} />
+              <PresetGroup title="Reflection Presets" items={REFLECTION_PRESETS} onApply={(name, patch) => applyPatch(patch, `Reflection · ${name}`)} />
+              <PresetGroup title="Highlight Presets" items={HIGHLIGHT_PRESET_PATCHES} onApply={(name, patch) => applyPatch(patch, `Highlight · ${name}`)} />
+              <PresetGroup title="Particle Presets" items={PARTICLE_PRESETS} onApply={(name, patch) => applyPatch(patch, `Particles · ${name}`)} />
+            </div>
+          </section>
+
+          <section>
+            <h3>Optional Full Eye Presets</h3>
             <div className="preset-grid">
               {Object.keys(PRESETS).map((name) => <button key={name} onClick={() => applyPreset(name)}>{name}</button>)}
             </div>
@@ -560,7 +622,7 @@ export default function App() {
             <NumberField label="Seed" value={seed} step={1} min={0} max={999999999} onChange={setSeed} />
             <div className="random-options">
               {(Object.keys(randomOptions) as (keyof RandomOptions)[]).map((key) => (
-                <label className="check-row mini" key={key}><input type="checkbox" checked={randomOptions[key]} onChange={(e: ChangeEvent<HTMLInputElement>) => setRandomOptions((prev) => ({ ...prev, [key]: e.target.checked }))} />{key}</label>
+                <label className="check-row mini" key={key}><input type="checkbox" checked={randomOptions[key]} onChange={(e: ChangeEvent<HTMLInputElement>) => setRandomOptions((prev: RandomOptions) => ({ ...prev, [key]: e.target.checked }))} />{key}</label>
               ))}
             </div>
             <div className="button-grid two-col">
@@ -593,9 +655,9 @@ export default function App() {
           <div className="canvas-toolbar">
             <div className="badge">{selectedEye.toUpperCase()} · {TOOL_LABELS[toolMode]}</div>
             <div className="canvas-zoom-group">
-              <button disabled={!canEdit} onClick={() => setView((v) => ({ ...v, zoom: clamp(v.zoom * 0.9, 0.08, 30) }))}>−</button>
+              <button disabled={!canEdit} onClick={() => setView((v: ViewState) => ({ ...v, zoom: clamp(v.zoom * 0.9, 0.08, 30) }))}>−</button>
               <span>{zoomLabel}</span>
-              <button disabled={!canEdit} onClick={() => setView((v) => ({ ...v, zoom: clamp(v.zoom * 1.1, 0.08, 30) }))}>+</button>
+              <button disabled={!canEdit} onClick={() => setView((v: ViewState) => ({ ...v, zoom: clamp(v.zoom * 1.1, 0.08, 30) }))}>+</button>
               <button disabled={!canEdit} onClick={fitView}>Fit</button>
               <button disabled={!canEdit} onClick={resetTo100}>100%</button>
             </div>
@@ -611,7 +673,7 @@ export default function App() {
               onContextMenu={(event: ReactMouseEvent<HTMLCanvasElement>) => event.preventDefault()}
             />
           </div>
-          <div className="statusbar"><span>{status}</span><span>Mouse wheel: zoom · Mask coordinates stay in original UV pixels</span></div>
+          <div className="statusbar"><span>{status}</span><span>Mouse wheel: zoom · Auto Detect works best when each eye UV is isolated by transparency</span></div>
         </main>
 
         <aside className="rightbar panel">
@@ -656,14 +718,17 @@ export default function App() {
                 <ColorField label="Color" value={selectedStyle.upperShadow.color} onChange={(v) => updateStyleSection('upperShadow', 'color', v)} />
                 <RangeField label="Intensity" value={selectedStyle.upperShadow.intensity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('upperShadow', 'intensity', v)} />
                 <RangeField label="Height" value={selectedStyle.upperShadow.height} min={0.15} max={0.9} step={0.01} onChange={(v) => updateStyleSection('upperShadow', 'height', v)} />
+                <RangeField label="Softness" value={selectedStyle.upperShadow.softness} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('upperShadow', 'softness', v)} />
               </LayerToggle>
               <LayerToggle title="Lower Glow" checked={selectedStyle.lowerGlow.enabled} onChange={(v) => updateStyleSection('lowerGlow', 'enabled', v)}>
                 <ColorField label="Color" value={selectedStyle.lowerGlow.color} onChange={(v) => updateStyleSection('lowerGlow', 'color', v)} />
                 <RangeField label="Intensity" value={selectedStyle.lowerGlow.intensity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('lowerGlow', 'intensity', v)} />
+                <RangeField label="Spread" value={selectedStyle.lowerGlow.spread} min={0.1} max={1} step={0.01} onChange={(v) => updateStyleSection('lowerGlow', 'spread', v)} />
               </LayerToggle>
               <LayerToggle title="Outer Ring" checked={selectedStyle.outerRing.enabled} onChange={(v) => updateStyleSection('outerRing', 'enabled', v)}>
                 <ColorField label="Color" value={selectedStyle.outerRing.color} onChange={(v) => updateStyleSection('outerRing', 'color', v)} />
                 <RangeField label="Thickness" value={selectedStyle.outerRing.thickness} min={0.01} max={0.2} step={0.005} onChange={(v) => updateStyleSection('outerRing', 'thickness', v)} />
+                <RangeField label="Opacity" value={selectedStyle.outerRing.opacity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('outerRing', 'opacity', v)} />
               </LayerToggle>
               <LayerToggle title="Inner Ring" checked={selectedStyle.innerRing.enabled} onChange={(v) => updateStyleSection('innerRing', 'enabled', v)}>
                 <ColorField label="Color" value={selectedStyle.innerRing.color} onChange={(v) => updateStyleSection('innerRing', 'color', v)} />
@@ -673,13 +738,15 @@ export default function App() {
               <LayerToggle title="Extra Inner Ring" checked={selectedStyle.extraInnerRing.enabled} onChange={(v) => updateStyleSection('extraInnerRing', 'enabled', v)}>
                 <ColorField label="Color" value={selectedStyle.extraInnerRing.color} onChange={(v) => updateStyleSection('extraInnerRing', 'color', v)} />
                 <RangeField label="Radius" value={selectedStyle.extraInnerRing.radius} min={0.18} max={0.86} step={0.01} onChange={(v) => updateStyleSection('extraInnerRing', 'radius', v)} />
+                <RangeField label="Thickness" value={selectedStyle.extraInnerRing.thickness} min={0.005} max={0.1} step={0.005} onChange={(v) => updateStyleSection('extraInnerRing', 'thickness', v)} />
               </LayerToggle>
               <LayerToggle title="Pupil" checked={selectedStyle.pupil.enabled} onChange={(v) => updateStyleSection('pupil', 'enabled', v)}>
-                <SelectField label="Shape" value={selectedStyle.pupil.shape} options={['circle', 'oval']} onChange={(v) => updateStyleSection('pupil', 'shape', v)} />
+                <SelectField label="Shape" value={selectedStyle.pupil.shape} options={PUPIL_SHAPES} onChange={(v) => updateStyleSection('pupil', 'shape', v)} />
                 <ColorField label="Color" value={selectedStyle.pupil.color} onChange={(v) => updateStyleSection('pupil', 'color', v)} />
-                <RangeField label="Scale X" value={selectedStyle.pupil.scaleX} min={0.05} max={0.55} step={0.01} onChange={(v) => updateStyleSection('pupil', 'scaleX', v)} />
+                <RangeField label="Scale X" value={selectedStyle.pupil.scaleX} min={0.04} max={0.55} step={0.01} onChange={(v) => updateStyleSection('pupil', 'scaleX', v)} />
                 <RangeField label="Scale Y" value={selectedStyle.pupil.scaleY} min={0.05} max={0.62} step={0.01} onChange={(v) => updateStyleSection('pupil', 'scaleY', v)} />
                 <RangeField label="Position Y" value={selectedStyle.pupil.y} min={0.25} max={0.75} step={0.01} onChange={(v) => updateStyleSection('pupil', 'y', v)} />
+                <RangeField label="Softness" value={selectedStyle.pupil.softness} min={0} max={0.2} step={0.01} onChange={(v) => updateStyleSection('pupil', 'softness', v)} />
               </LayerToggle>
             </div>
           </details>
@@ -700,9 +767,11 @@ export default function App() {
                 <RangeField label="Amount" value={selectedStyle.softTexture.amount} min={0} max={70} step={1} onChange={(v) => updateStyleSection('softTexture', 'amount', Math.round(v))} />
               </LayerToggle>
               <LayerToggle title="Particles" checked={selectedStyle.particles.enabled} onChange={(v) => updateStyleSection('particles', 'enabled', v)}>
-                <SelectField label="Type" value={selectedStyle.particles.type} options={['dot', 'star', 'diamond', 'tinyCircle']} onChange={(v) => updateStyleSection('particles', 'type', v)} />
+                <SelectField label="Type" value={selectedStyle.particles.type} options={PARTICLE_TYPES} onChange={(v) => updateStyleSection('particles', 'type', v)} />
                 <ColorField label="Color" value={selectedStyle.particles.color} onChange={(v) => updateStyleSection('particles', 'color', v)} />
                 <RangeField label="Count" value={selectedStyle.particles.count} min={0} max={30} step={1} onChange={(v) => updateStyleSection('particles', 'count', Math.round(v))} />
+                <RangeField label="Size Min" value={selectedStyle.particles.sizeMin} min={0.001} max={0.04} step={0.001} onChange={(v) => updateStyleSection('particles', 'sizeMin', v)} />
+                <RangeField label="Size Max" value={selectedStyle.particles.sizeMax} min={0.001} max={0.05} step={0.001} onChange={(v) => updateStyleSection('particles', 'sizeMax', v)} />
               </LayerToggle>
             </div>
           </details>
@@ -711,21 +780,23 @@ export default function App() {
             <summary>Lower Motif · Reflection</summary>
             <div className="section-body">
               <LayerToggle title="Lower Motif" checked={selectedStyle.lowerMotif.enabled} onChange={(v) => updateStyleSection('lowerMotif', 'enabled', v)}>
-                <SelectField label="Motif" value={selectedStyle.lowerMotif.type} options={['petal', 'dash', 'droplet', 'glass', 'wave', 'ovalCluster']} onChange={(v) => updateStyleSection('lowerMotif', 'type', v)} />
+                <SelectField label="Motif" value={selectedStyle.lowerMotif.type} options={MOTIF_TYPES} onChange={(v) => updateStyleSection('lowerMotif', 'type', v)} />
                 <ColorField label="Color" value={selectedStyle.lowerMotif.color} onChange={(v) => updateStyleSection('lowerMotif', 'color', v)} />
-                <RangeField label="Count" value={selectedStyle.lowerMotif.count} min={1} max={18} step={1} onChange={(v) => updateStyleSection('lowerMotif', 'count', Math.round(v))} />
-                <RangeField label="Size" value={selectedStyle.lowerMotif.size} min={0.02} max={0.18} step={0.005} onChange={(v) => updateStyleSection('lowerMotif', 'size', v)} />
+                <RangeField label="Count" value={selectedStyle.lowerMotif.count} min={1} max={20} step={1} onChange={(v) => updateStyleSection('lowerMotif', 'count', Math.round(v))} />
+                <RangeField label="Size" value={selectedStyle.lowerMotif.size} min={0.03} max={0.18} step={0.005} onChange={(v) => updateStyleSection('lowerMotif', 'size', v)} />
                 <RangeField label="Spread" value={selectedStyle.lowerMotif.spread} min={0.2} max={0.9} step={0.01} onChange={(v) => updateStyleSection('lowerMotif', 'spread', v)} />
                 <RangeField label="Y Position" value={selectedStyle.lowerMotif.y} min={0.5} max={0.9} step={0.01} onChange={(v) => updateStyleSection('lowerMotif', 'y', v)} />
                 <RangeField label="Opacity" value={selectedStyle.lowerMotif.opacity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('lowerMotif', 'opacity', v)} />
                 <RangeField label="Glow" value={selectedStyle.lowerMotif.glow} min={0} max={0.5} step={0.01} onChange={(v) => updateStyleSection('lowerMotif', 'glow', v)} />
               </LayerToggle>
               <LayerToggle title="Reflection" checked={selectedStyle.reflection.enabled} onChange={(v) => updateStyleSection('reflection', 'enabled', v)}>
-                <SelectField label="Type" value={selectedStyle.reflection.type} options={['softPatch', 'curved', 'side', 'haze']} onChange={(v) => updateStyleSection('reflection', 'type', v)} />
+                <SelectField label="Type" value={selectedStyle.reflection.type} options={REFLECTION_TYPES} onChange={(v) => updateStyleSection('reflection', 'type', v)} />
                 <ColorField label="Color" value={selectedStyle.reflection.color} onChange={(v) => updateStyleSection('reflection', 'color', v)} />
                 <RangeField label="Opacity" value={selectedStyle.reflection.opacity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('reflection', 'opacity', v)} />
                 <RangeField label="X" value={selectedStyle.reflection.x} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('reflection', 'x', v)} />
                 <RangeField label="Y" value={selectedStyle.reflection.y} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('reflection', 'y', v)} />
+                <RangeField label="Scale X" value={selectedStyle.reflection.scaleX} min={0.05} max={1} step={0.01} onChange={(v) => updateStyleSection('reflection', 'scaleX', v)} />
+                <RangeField label="Scale Y" value={selectedStyle.reflection.scaleY} min={0.05} max={1} step={0.01} onChange={(v) => updateStyleSection('reflection', 'scaleY', v)} />
               </LayerToggle>
             </div>
           </details>
@@ -734,7 +805,7 @@ export default function App() {
             <summary>Highlight Group</summary>
             <div className="section-body">
               <LayerToggle title="Highlights" checked={selectedStyle.highlight.enabled} onChange={(v) => updateStyleSection('highlight', 'enabled', v)}>
-                <SelectField label="Preset" value={selectedStyle.highlight.preset} options={['singleLarge', 'animeStandard', 'glassyDouble', 'cluster', 'sideHighlight', 'topDome']} onChange={(v) => updateStyleSection('highlight', 'preset', v)} />
+                <SelectField label="Preset" value={selectedStyle.highlight.preset} options={HIGHLIGHT_TYPES} onChange={(v) => updateStyleSection('highlight', 'preset', v)} />
                 <ColorField label="Color" value={selectedStyle.highlight.color} onChange={(v) => updateStyleSection('highlight', 'color', v)} />
                 <RangeField label="Opacity" value={selectedStyle.highlight.opacity} min={0} max={1} step={0.01} onChange={(v) => updateStyleSection('highlight', 'opacity', v)} />
                 <RangeField label="Size" value={selectedStyle.highlight.size} min={0.35} max={2} step={0.01} onChange={(v) => updateStyleSection('highlight', 'size', v)} />
@@ -747,6 +818,19 @@ export default function App() {
         </aside>
       </div>
     </div>
+  )
+}
+
+function PresetGroup({ title, items, onApply }: { title: string; items: Record<string, any>; onApply: (name: string, patch: any) => void }) {
+  return (
+    <details open>
+      <summary>{title}</summary>
+      <div className="preset-grid compact-grid">
+        {Object.entries(items).map(([name, patch]) => (
+          <button key={name} onClick={() => onApply(name, patch)}>{name}</button>
+        ))}
+      </div>
+    </details>
   )
 }
 
@@ -836,10 +920,10 @@ function drawEmptyState(ctx: CanvasRenderingContext2D, width: number, height: nu
   ctx.fillStyle = 'rgba(255,255,255,0.92)'
   ctx.font = '700 24px sans-serif'
   ctx.textAlign = 'center'
-  ctx.fillText('UV Eye Texture Studio v0.3', width / 2, height / 2 - 28)
+  ctx.fillText('UV Eye Texture Studio v0.4', width / 2, height / 2 - 28)
   ctx.fillStyle = 'rgba(255,255,255,0.58)'
   ctx.font = '15px sans-serif'
-  ctx.fillText('Open a PNG, draw a free-form polygon mask, then build the iris in procedural layers.', width / 2, height / 2 + 7)
+  ctx.fillText('Open a PNG, auto detect the eye UVs from transparency, then build the iris from detailed element presets.', width / 2, height / 2 + 7)
   ctx.fillText('Your UV image is processed locally in the browser.', width / 2, height / 2 + 33)
 }
 
@@ -848,7 +932,7 @@ function NumberField({ label, value, min, max, step, onChange }: { label: string
 }
 
 function RangeField({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void }) {
-  return <label className="field"><div className="field-head"><span>{label}</span><strong>{Number(value).toFixed(step >= 1 ? 0 : 2)}</strong></div><input type="range" value={value} min={min} max={max} step={step} onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(Number(e.target.value))} /></label>
+  return <label className="field"><div className="field-head"><span>{label}</span><strong>{Number(value).toFixed(step >= 1 ? 0 : step >= 0.01 ? 2 : 3)}</strong></div><input type="range" value={value} min={min} max={max} step={step} onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(Number(e.target.value))} /></label>
 }
 
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {

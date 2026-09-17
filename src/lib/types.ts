@@ -24,10 +24,10 @@ export interface PolygonMask {
 
 export type EyeMask = EllipseMask | PolygonMask
 
-export type PupilShape = 'circle' | 'oval'
-export type MotifType = 'petal' | 'dash' | 'droplet' | 'glass' | 'wave' | 'ovalCluster'
-export type ReflectionType = 'softPatch' | 'curved' | 'side' | 'haze'
-export type HighlightPreset = 'singleLarge' | 'animeStandard' | 'glassyDouble' | 'cluster' | 'sideHighlight' | 'topDome'
+export type PupilShape = 'circle' | 'oval' | 'heart' | 'petal' | 'slit'
+export type MotifType = 'petal' | 'dash' | 'droplet' | 'glass' | 'wave' | 'ovalCluster' | 'lightShards' | 'mixedPoints'
+export type ReflectionType = 'softPatch' | 'curved' | 'side' | 'haze' | 'topBand'
+export type HighlightPreset = 'singleLarge' | 'animeStandard' | 'glassyDouble' | 'cluster' | 'sideHighlight' | 'topDome' | 'sparkleArc'
 export type ParticleType = 'dot' | 'star' | 'diamond' | 'tinyCircle'
 
 export interface EyeStyle {
@@ -180,7 +180,7 @@ export interface RandomOptions {
 }
 
 export interface SavedProjectSettings {
-  version: 3
+  version: 4
   seed: number
   linkEyes: boolean
   selectedEye: EyeSide

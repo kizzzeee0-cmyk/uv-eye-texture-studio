@@ -49,13 +49,14 @@ export function randomizeStyle(current: EyeStyle, seed: number, options: RandomO
   }
 
   if (options.structure) {
+    const shapes: EyeStyle['pupil']['shape'][] = ['circle', 'oval', 'heart', 'petal', 'slit']
     next.outerRing.thickness = 0.045 + rand() * 0.075
     next.innerRing.radius = 0.24 + rand() * 0.18
     next.innerRing.thickness = 0.025 + rand() * 0.06
     next.extraInnerRing.radius = 0.44 + rand() * 0.2
     next.extraInnerRing.thickness = 0.008 + rand() * 0.028
-    next.pupil.shape = rand() > 0.4 ? 'oval' : 'circle'
-    next.pupil.scaleX = 0.14 + rand() * 0.18
+    next.pupil.shape = shapes[Math.floor(rand() * shapes.length)]
+    next.pupil.scaleX = next.pupil.shape === 'slit' ? 0.05 + rand() * 0.05 : 0.14 + rand() * 0.16
     next.pupil.scaleY = next.pupil.shape === 'circle' ? next.pupil.scaleX : 0.2 + rand() * 0.18
     next.pupil.y = 0.44 + rand() * 0.08
   }
@@ -68,7 +69,7 @@ export function randomizeStyle(current: EyeStyle, seed: number, options: RandomO
     next.radial.randomness = 0.08 + rand() * 0.36
     next.radial.rotation = rand() * Math.PI * 2
     next.radial.seed = seed + 17
-    next.softTexture.enabled = rand() > 0.2
+    next.softTexture.enabled = rand() > 0.15
     next.softTexture.strength = 0.05 + rand() * 0.17
     next.softTexture.amount = Math.round(12 + rand() * 36)
     next.softTexture.seed = seed + 99
@@ -80,7 +81,7 @@ export function randomizeStyle(current: EyeStyle, seed: number, options: RandomO
   }
 
   if (options.motif) {
-    const motifs: EyeStyle['lowerMotif']['type'][] = ['petal', 'dash', 'droplet', 'glass', 'wave', 'ovalCluster']
+    const motifs: EyeStyle['lowerMotif']['type'][] = ['petal', 'dash', 'droplet', 'glass', 'wave', 'ovalCluster', 'lightShards', 'mixedPoints']
     next.lowerMotif.enabled = true
     next.lowerMotif.type = motifs[Math.floor(rand() * motifs.length)]
     next.lowerMotif.count = Math.round(7 + rand() * 7)
@@ -89,18 +90,18 @@ export function randomizeStyle(current: EyeStyle, seed: number, options: RandomO
     next.lowerMotif.y = 0.67 + rand() * 0.12
     next.lowerMotif.opacity = 0.55 + rand() * 0.35
     next.reflection.enabled = rand() > 0.1
-    const reflections: EyeStyle['reflection']['type'][] = ['softPatch', 'curved', 'side', 'haze']
+    const reflections: EyeStyle['reflection']['type'][] = ['softPatch', 'curved', 'side', 'haze', 'topBand']
     next.reflection.type = reflections[Math.floor(rand() * reflections.length)]
     next.reflection.opacity = 0.16 + rand() * 0.34
     next.reflection.x = 0.2 + rand() * 0.28
-    next.reflection.y = 0.25 + rand() * 0.28
+    next.reflection.y = 0.18 + rand() * 0.3
     next.reflection.scaleX = 0.38 + rand() * 0.35
-    next.reflection.scaleY = 0.22 + rand() * 0.32
+    next.reflection.scaleY = 0.14 + rand() * 0.36
     next.reflection.rotation = -0.8 + rand() * 1.6
   }
 
   if (options.highlights) {
-    const presets: EyeStyle['highlight']['preset'][] = ['singleLarge', 'animeStandard', 'glassyDouble', 'cluster', 'sideHighlight', 'topDome']
+    const presets: EyeStyle['highlight']['preset'][] = ['singleLarge', 'animeStandard', 'glassyDouble', 'cluster', 'sideHighlight', 'topDome', 'sparkleArc']
     next.highlight.enabled = true
     next.highlight.preset = presets[Math.floor(rand() * presets.length)]
     next.highlight.opacity = 0.75 + rand() * 0.25

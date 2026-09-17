@@ -1,6 +1,6 @@
 import { getMaskBounds, traceMaskPath, translateMask } from './mask'
 import { mulberry32 } from './random'
-import type { EyeMask, EyeStyle } from './types'
+import type { EyeMask, EyeStyle, PupilShape } from './types'
 
 function hexToRgba(hex: string, alpha: number) {
   const normalized = hex.replace('#', '')
@@ -27,13 +27,34 @@ function applyGlow(ctx: CanvasRenderingContext2D, color: string, amount: number,
   ctx.shadowBlur = Math.max(0, amount * basis)
 }
 
-export function compositeIrisDesign(
-  target: CanvasRenderingContext2D,
-  mask: EyeMask,
-  style: EyeStyle,
-  width: number,
-  height: number,
-) {
+function shapePath(ctx: CanvasRenderingContext2D, shape: PupilShape, cx: number, cy: number, rx: number, ry: number) {
+  ctx.beginPath()
+  if (shape === 'circle' || shape === 'oval') {
+    ctx.ellipse(cx, cy, Math.max(0.1, rx), Math.max(0.1, ry), 0, 0, Math.PI * 2)
+    return
+  }
+  if (shape === 'slit') {
+    ctx.moveTo(cx, cy - ry)
+    ctx.bezierCurveTo(cx + rx * 0.85, cy - ry * 0.15, cx + rx * 0.45, cy + ry * 0.78, cx, cy + ry)
+    ctx.bezierCurveTo(cx - rx * 0.45, cy + ry * 0.78, cx - rx * 0.85, cy - ry * 0.15, cx, cy - ry)
+    ctx.closePath()
+    return
+  }
+  if (shape === 'heart') {
+    ctx.moveTo(cx, cy + ry)
+    ctx.bezierCurveTo(cx + rx * 1.15, cy + ry * 0.35, cx + rx * 1.12, cy - ry * 0.58, cx, cy - ry * 0.22)
+    ctx.bezierCurveTo(cx - rx * 1.12, cy - ry * 0.58, cx - rx * 1.15, cy + ry * 0.35, cx, cy + ry)
+    ctx.closePath()
+    return
+  }
+  // petal
+  ctx.moveTo(cx, cy - ry)
+  ctx.bezierCurveTo(cx + rx * 0.82, cy - ry * 0.5, cx + rx * 0.82, cy + ry * 0.5, cx, cy + ry)
+  ctx.bezierCurveTo(cx - rx * 0.82, cy + ry * 0.5, cx - rx * 0.82, cy - ry * 0.5, cx, cy - ry)
+  ctx.closePath()
+}
+
+export function compositeIrisDesign(target: CanvasRenderingContext2D, mask: EyeMask, style: EyeStyle, width: number, height: number) {
   const designCanvas = document.createElement('canvas')
   designCanvas.width = Math.max(1, Math.ceil(width))
   designCanvas.height = Math.max(1, Math.ceil(height))
@@ -61,7 +82,6 @@ export function compositeIrisDesign(
         softCtx.filter = `blur(${Math.max(0.5, feather)}px)`
         softCtx.drawImage(hardMask, 0, 0)
         softCtx.filter = 'none'
-        // Keep the blur strictly inside the hard mask so pixels outside the selected UV area remain untouched.
         softCtx.globalCompositeOperation = 'destination-in'
         softCtx.drawImage(hardMask, 0, 0)
         designCtx.globalCompositeOperation = 'destination-in'
@@ -138,6 +158,21 @@ function drawUpperShadow(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeo
   gradient.addColorStop(1, hexToRgba(upperShadow.color, 0))
   ctx.fillStyle = gradient
   ctx.fillRect(bounds.minX, bounds.minY, bounds.width, endY - bounds.minY)
+
+  // faint lash bands for a more believable upper eyelash shadow
+  ctx.save()
+  ctx.globalAlpha = upperShadow.intensity * 0.18
+  ctx.strokeStyle = upperShadow.color
+  ctx.lineWidth = Math.max(0.75, bounds.height * 0.025)
+  for (let i = 0; i < 4; i += 1) {
+    const sx = bounds.minX + bounds.width * (0.12 + i * 0.18)
+    const sy = bounds.minY + bounds.height * 0.18
+    ctx.beginPath()
+    ctx.moveTo(sx, sy)
+    ctx.quadraticCurveTo(sx + bounds.width * 0.03, sy + bounds.height * 0.12, sx + bounds.width * 0.07, sy + bounds.height * 0.28)
+    ctx.stroke()
+  }
+  ctx.restore()
 }
 
 function drawLowerGlow(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof getMaskBounds>, style: EyeStyle) {
@@ -182,16 +217,15 @@ function drawPupil(ctx: CanvasRenderingContext2D, cx: number, cy: number, rx: nu
   ctx.globalAlpha = pupil.opacity * style.opacity
   ctx.fillStyle = pupil.color
   ctx.filter = pupil.softness > 0 ? `blur(${pupil.softness * Math.min(rx, ry) * 0.15}px)` : 'none'
-  ellipsePath(ctx, px, py, prx, pry)
+  shapePath(ctx, pupil.shape, px, py, prx, pry)
   ctx.fill()
 
-  // A subtle internal depth ring prevents the pupil from reading as a flat black dot.
   const depth = ctx.createRadialGradient(px, py + pry * 0.18, prx * 0.05, px, py, Math.max(prx, pry))
   depth.addColorStop(0, 'rgba(255,255,255,0.10)')
   depth.addColorStop(0.55, 'rgba(255,255,255,0.025)')
   depth.addColorStop(1, 'rgba(0,0,0,0.24)')
   ctx.fillStyle = depth
-  ellipsePath(ctx, px, py, prx, pry)
+  shapePath(ctx, pupil.shape, px, py, prx, pry)
   ctx.fill()
   ctx.restore()
 }
@@ -269,6 +303,19 @@ function drawReflection(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof
     gradient.addColorStop(1, hexToRgba(reflection.color, 0))
     ctx.fillStyle = gradient
     ellipsePath(ctx, 0, 0, rx, ry)
+    ctx.fill()
+  } else if (reflection.type === 'topBand') {
+    const gradient = ctx.createLinearGradient(0, -ry, 0, ry)
+    gradient.addColorStop(0, hexToRgba(reflection.color, 0.95))
+    gradient.addColorStop(0.5, hexToRgba(reflection.color, 0.38))
+    gradient.addColorStop(1, hexToRgba(reflection.color, 0))
+    ctx.fillStyle = gradient
+    ctx.beginPath()
+    ctx.moveTo(-rx, -ry * 0.2)
+    ctx.quadraticCurveTo(0, -ry * 1.3, rx, -ry * 0.2)
+    ctx.lineTo(rx, ry * 0.15)
+    ctx.quadraticCurveTo(0, -ry * 0.5, -rx, ry * 0.15)
+    ctx.closePath()
     ctx.fill()
   } else {
     const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.max(rx, ry))
@@ -349,6 +396,23 @@ function drawLowerMotif(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof
       ctx.lineTo(size * 0.72, -size * 0.16)
       ctx.lineTo(size * 0.28, size * 0.84)
       ctx.closePath()
+      ctx.fill()
+    } else if (motif.type === 'lightShards') {
+      ctx.lineWidth = Math.max(1, size * 0.26)
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      ctx.moveTo(-size * 0.62, size * 0.3)
+      ctx.lineTo(0, -size)
+      ctx.lineTo(size * 0.6, size * 0.22)
+      ctx.stroke()
+      ctx.beginPath()
+      ctx.arc(0, size * 0.06, size * 0.18, 0, Math.PI * 2)
+      ctx.fill()
+    } else if (motif.type === 'mixedPoints') {
+      const r1 = size * (i % 2 === 0 ? 0.42 : 0.22)
+      ellipsePath(ctx, -r1 * 0.4, 0, r1, r1)
+      ctx.fill()
+      ellipsePath(ctx, r1 * 1.2, size * 0.1, r1 * 0.55, r1 * 0.55)
       ctx.fill()
     } else {
       ellipsePath(ctx, 0, 0, size * 0.52, size, angle)
@@ -439,15 +503,20 @@ function drawHighlights(ctx: CanvasRenderingContext2D, bounds: ReturnType<typeof
       ctx.stroke()
       circle(1.8, 1.1, 0.28)
       break
+    case 'sparkleArc':
+      circle(0, 0, 0.88)
+      circle(1.52, 0.72, 0.28)
+      circle(2.05, 1.65, 0.16)
+      ctx.lineWidth = Math.max(0.75, size * 0.18)
+      ctx.beginPath()
+      ctx.arc(x + size * 0.38, y + size * 1.2, size * 1.8, Math.PI * 1.1, Math.PI * 1.55)
+      ctx.stroke()
+      break
   }
   ctx.restore()
 }
 
-export function exportFullUvPng(
-  originalImage: HTMLImageElement,
-  masks: Record<'left' | 'right', EyeMask>,
-  styles: Record<'left' | 'right', EyeStyle>,
-) {
+export function exportFullUvPng(originalImage: HTMLImageElement, masks: Record<'left' | 'right', EyeMask>, styles: Record<'left' | 'right', EyeStyle>) {
   const canvas = document.createElement('canvas')
   canvas.width = originalImage.naturalWidth
   canvas.height = originalImage.naturalHeight
